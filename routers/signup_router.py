@@ -1,17 +1,20 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, constr
 from controllers.signup_controller import signup_user
 
 router = APIRouter()
 
 class SignupPayload(BaseModel):
-    name: str
-    email: str
-    password: str
+    name: constr(min_length=2, max_length=50)
+    email: EmailStr
+    password: constr(min_length=6)
 
 @router.post("/signup")
-def signup(payload: SignupPayload):
-    result = signup_user(payload.name, payload.email, payload.password)
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
+async def signup(payload: SignupPayload):
+    try:
+        result = signup_user(payload.name, payload.email, payload.password)
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
