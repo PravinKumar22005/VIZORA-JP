@@ -1,1 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 venv/
+.env
+
+# VS Code
+.vscode/
+
+# React
+vizora-frontend/node_modules/
+vizora-frontend/.pnp
+vizora-frontend/.pnp.js
+vizora-frontend/coverage/
+vizora-frontend/build/
+vizora-frontend/.DS_Store
+vizora-frontend/.env.local
+vizora-frontend/.env.development.local
+vizora-frontend/.env.test.local
+vizora-frontend/.env.production.local
+vizora-frontend/npm-debug.log*
+vizora-frontend/yarn-debug.log*
+vizora-frontend/yarn-error.log*
+
+# Database
+*.sqlite3
