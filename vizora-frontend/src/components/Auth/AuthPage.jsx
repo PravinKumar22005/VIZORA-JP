@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
+import ReactDOM from 'react-dom';
 import styled, { keyframes, css } from 'styled-components';
-import { TextField, Button, IconButton, CircularProgress } from '@mui/material';
-import { Facebook, Google, LinkedIn } from '@mui/icons-material';
+import { TextField, Button, CircularProgress } from '@mui/material';
 import { api } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 const slideRight = keyframes`
   from { transform: translateX(-100%); }
@@ -15,16 +17,30 @@ const slideLeft = keyframes`
   to { transform: translateX(0); }
 `;
 
+const PageWrapper = styled.div`
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+`;
+
 const Container = styled.div`
-  background: white;
+  background: #212121;
   border-radius: 10px;
-  box-shadow: 0 14px 28px rgba(0,0,0,0.25);
+  box-shadow: 0 14px 28px rgba(20, 255, 236, 0.15);
   position: relative;
   overflow: hidden;
   width: 768px;
   max-width: 100%;
   min-height: 480px;
-  margin: 2rem auto;
 `;
 
 const FormContainer = styled.div`
@@ -43,15 +59,8 @@ const FormContainer = styled.div`
   `}
 `;
 
-
-const SocialContainer = styled.div`
-  margin: 20px 0;
-  display: flex;
-  gap: 1rem;
-`;
-
 const Form = styled.form`
-  background-color: white;
+  background-color: #212121;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -59,10 +68,11 @@ const Form = styled.form`
   padding: 0 50px;
   height: 100%;
   text-align: center;
+  color: #E0E0E0;
 `;
 
 const GradientOverlay = styled.div`
-  background: linear-gradient(to right, #FF4B2B, #FF416C);
+  background: linear-gradient(to right, #0D7377, #14FFEC);
   color: white;
   position: absolute;
   width: 50%;
@@ -86,157 +96,299 @@ const LoadingWrapper = styled.div`
 `;
 
 const PageTitle = styled.h1`
-  color: #FF4B2B;
+  color: #14FFEC;
   margin-bottom: 20px;
 `;
 
-const AuthPage = () => {
-    const navigate = useNavigate();
-    const [isSignIn, setIsSignIn] = useState(true);
-    const [isLoading, setIsLoading] = useState(false);
-    const [isAnimating, setIsAnimating] = useState(false);
-    const [formData, setFormData] = useState({
-        name: '',
-        email: '',
-        password: ''
-    });
-    const [error, setError] = useState('');
+const CloseButton = styled.button`
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 2rem;
+  cursor: pointer;
+  z-index: 1001;
+  transition: color 0.3s;
+  &:hover {
+    color: white;
+  }
+`;
 
-    const handleModeSwitch = () => {
-        if (isLoading || isAnimating) return;
-        setIsAnimating(true);
-        setIsSignIn(!isSignIn);
-        setTimeout(() => {
-            setIsAnimating(false);
-        }, 600);
-    };
+const AuthPage = ({ onClose }) => {
+  const navigate = useNavigate();
+  const [isSignIn, setIsSignIn] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    password: ''
+  });
+  const [error, setError] = useState('');
+  const [validationErrors, setValidationErrors] = useState({
+    name: '',
+    email: '',
+    password: ''
+  });
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (isAnimating) return;
-        setError('');
-        setIsLoading(true);
-        
-        try {
-            if (isSignIn) {
-                const response = await api.login({
-                    email: formData.email,
-                    password: formData.password
-                });
-                localStorage.setItem('token', response.access_token);
-                localStorage.setItem('user', JSON.stringify(response.user));
-                navigate('/settings');
-            } else {
-                await api.signup({
-                    name: formData.name,
-                    email: formData.email,
-                    password: formData.password
-                });
-                setFormData({ name: '', email: '', password: '' });
-                alert('Signup successful! Please login.');
-                handleModeSwitch();
-            }
-        } catch (err) {
-            console.error('Auth error:', err);
-            setError(err.detail || 'An error occurred');
-        } finally {
-            setIsLoading(false);
-        }
-    };
+  const handleModeSwitch = () => {
+    if (isLoading || isAnimating) return;
+    setIsAnimating(true);
+    setIsSignIn(!isSignIn);
+    setFormData({ name: '', email: '', password: '' });
+    setError('');
+    setValidationErrors({ name: '', email: '', password: '' });
+    setTimeout(() => {
+      setIsAnimating(false);
+    }, 600);
+  };
 
-    return (
-        <Container>
-            <FormContainer signin={isSignIn}>
-                <Form onSubmit={handleSubmit}>
-                    <PageTitle>{isSignIn ? 'Sign In' : 'Create Account'}</PageTitle>
-                    <SocialContainer>
-                        <IconButton color="primary"><Facebook /></IconButton>
-                        <IconButton color="error"><Google /></IconButton>
-                        <IconButton color="primary"><LinkedIn /></IconButton>
-                    </SocialContainer>
-                    <span>or use your email</span>
-                    {!isSignIn && (
-                        <TextField 
-                            fullWidth 
-                            margin="normal" 
-                            label="Name" 
-                            value={formData.name}
-                            onChange={(e) => setFormData({...formData, name: e.target.value})}
-                            disabled={isLoading || isAnimating}
-                        />
-                    )}
-                    <TextField 
-                        fullWidth 
-                        margin="normal" 
-                        label="Email" 
-                        type="email"
-                        value={formData.email}
-                        onChange={(e) => setFormData({...formData, email: e.target.value})}
-                        disabled={isLoading || isAnimating}
-                    />
-                    <TextField 
-                        fullWidth 
-                        margin="normal" 
-                        label="Password" 
-                        type="password" 
-                        value={formData.password}
-                        onChange={(e) => setFormData({...formData, password: e.target.value})}
-                        disabled={isLoading || isAnimating}
-                    />
-                    {error && <ErrorMessage>{error}</ErrorMessage>}
-                    <Button 
-                        type="submit"
-                        variant="contained" 
-                        disabled={isLoading || isAnimating}
-                        sx={{ 
-                            mt: 3, 
-                            background: 'linear-gradient(45deg, #FF4B2B 30%, #FF416C 90%)',
-                            borderRadius: '20px',
-                            padding: '10px 45px',
-                            '&:hover': {
-                                background: 'linear-gradient(45deg, #FF416C 30%, #FF4B2B 90%)',
-                            }
-                        }}
-                    >
-                        {isLoading ? (
-                            <LoadingWrapper>
-                                <CircularProgress size={20} color="inherit" />
-                                Processing...
-                            </LoadingWrapper>
-                        ) : (
-                            isSignIn ? 'Sign In' : 'Sign Up'
-                        )}
-                    </Button>
-                </Form>
-            </FormContainer>
-            <GradientOverlay signin={isSignIn}>
-                <div style={{ padding: '3rem', textAlign: 'center' }}>
-                    <h1>{isSignIn ? 'Hello, Friend!' : 'Welcome Back!'}</h1>
-                    <p>
-                        {isSignIn 
-                            ? 'Enter your personal details and start journey with us' 
-                            : 'To keep connected with us please login with your personal info'
-                        }
-                    </p>
-                    <Button 
-                        variant="outlined" 
-                        color="inherit"
-                        onClick={handleModeSwitch}
-                        disabled={isLoading || isAnimating}
-                        sx={{ 
-                            borderRadius: '20px', 
-                            padding: '10px 45px',
-                            '&:hover': {
-                                backgroundColor: 'rgba(255, 255, 255, 0.1)'
-                            }
-                        }}
-                    >
-                        {isSignIn ? 'Sign Up' : 'Sign In'}
-                    </Button>
-                </div>
-            </GradientOverlay>
-        </Container>
-    );
+  const validateForm = () => {
+    const errors = {};
+    if (!isSignIn && !formData.name?.trim()) {
+      errors.name = 'Name is required';
+    }
+    if (!formData.email?.trim()) {
+      errors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      errors.email = 'Invalid email format';
+    }
+    if (!formData.password) {
+      errors.password = 'Password is required';
+    } else if (formData.password.length < 6) {
+      errors.password = 'Password must be at least 6 characters';
+    }
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (isAnimating) return;
+
+    if (!validateForm()) return;
+
+    setError('');
+    setIsLoading(true);
+
+    try {
+      if (isSignIn) {
+        const response = await api.login({
+          email: formData.email,
+          password: formData.password
+        });
+        localStorage.setItem('token', response.access_token);
+        localStorage.setItem('user', JSON.stringify(response.user));
+        toast.success('Successfully logged in!');
+        navigate('/dashboard');
+      } else {
+        const response = await api.signup({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password
+        });
+        localStorage.setItem('token', response.access_token);
+        localStorage.setItem('user', JSON.stringify(response.user));
+        localStorage.setItem('playWelcomeVideo', 'true');
+        toast.success('Account created successfully!');
+        navigate('/welcome');
+      }
+    } catch (err) {
+      console.error('Auth error:', err);
+      const errorMessage = err.response?.data?.message || err.message || 'An error occurred';
+      toast.error(errorMessage);
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return ReactDOM.createPortal(
+    <PageWrapper onClick={onClose}>
+      <Container onClick={(e) => e.stopPropagation()}>
+        <CloseButton onClick={onClose}>&times;</CloseButton>
+        <FormContainer signin={isSignIn}>
+          <Form onSubmit={handleSubmit}>
+            <PageTitle>{isSignIn ? 'Sign In' : 'Create Account'}</PageTitle>
+
+            {!isSignIn && (
+              <TextField
+                fullWidth
+                margin="normal"
+                label="Name"
+                value={formData.name}
+                error={!!validationErrors.name}
+                helperText={validationErrors.name}
+                onChange={(e) => {
+                  setFormData({ ...formData, name: e.target.value });
+                  setValidationErrors({ ...validationErrors, name: '' });
+                }}
+                disabled={isLoading || isAnimating}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    color: '#E0E0E0',
+                    '& fieldset': { borderColor: '#0D7377' },
+                    '&:hover fieldset': { borderColor: '#14FFEC' },
+                    '&.Mui-focused fieldset': { borderColor: '#14FFEC' }
+                  },
+                  '& .MuiInputLabel-root': {
+                    color: '#0D7377',
+                    '&.Mui-focused': { color: '#14FFEC' }
+                  }
+                }}
+              />
+            )}
+
+            <TextField
+              fullWidth
+              margin="normal"
+              label="Email"
+              type="email"
+              value={formData.email}
+              error={!!validationErrors.email}
+              helperText={validationErrors.email}
+              onChange={(e) => {
+                setFormData({ ...formData, email: e.target.value });
+                setValidationErrors({ ...validationErrors, email: '' });
+              }}
+              disabled={isLoading || isAnimating}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  color: '#E0E0E0',
+                  '& fieldset': { borderColor: '#0D7377' },
+                  '&:hover fieldset': { borderColor: '#14FFEC' },
+                  '&.Mui-focused fieldset': { borderColor: '#14FFEC' }
+                },
+                '& .MuiInputLabel-root': {
+                  color: '#0D7377',
+                  '&.Mui-focused': { color: '#14FFEC' }
+                }
+              }}
+            />
+
+            <TextField
+              fullWidth
+              margin="normal"
+              label="Password"
+              type="password"
+              value={formData.password}
+              error={!!validationErrors.password}
+              helperText={validationErrors.password}
+              onChange={(e) => {
+                setFormData({ ...formData, password: e.target.value });
+                setValidationErrors({ ...validationErrors, password: '' });
+              }}
+              disabled={isLoading || isAnimating}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  color: '#E0E0E0',
+                  '& fieldset': { borderColor: '#0D7377' },
+                  '&:hover fieldset': { borderColor: '#14FFEC' },
+                  '&.Mui-focused fieldset': { borderColor: '#14FFEC' }
+                },
+                '& .MuiInputLabel-root': {
+                  color: '#0D7377',
+                  '&.Mui-focused': { color: '#14FFEC' }
+                }
+              }}
+            />
+
+            {error && <ErrorMessage>{error}</ErrorMessage>}
+
+            <Button
+              type="submit"
+              fullWidth
+              variant="contained"
+              disabled={isLoading || isAnimating}
+              sx={{
+                mt: 3,
+                background: 'linear-gradient(45deg, #0D7377 30%, #14FFEC 90%)',
+                borderRadius: '20px',
+                padding: '10px 45px',
+                '&:hover': {
+                  background: 'linear-gradient(45deg, #14FFEC 30%, #0D7377 90%)',
+                }
+              }}
+            >
+              {isLoading ? (
+                <LoadingWrapper>
+                  <CircularProgress size={20} color="inherit" />
+                  <span>Processing...</span>
+                </LoadingWrapper>
+              ) : (
+                isSignIn ? 'Sign In' : 'Sign Up'
+              )}
+            </Button>
+          </Form>
+        </FormContainer>
+
+        <GradientOverlay signin={isSignIn}>
+          <div style={{ 
+            padding: '3rem', 
+            textAlign: 'center',
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center'
+          }}>
+            <h1 style={{ 
+              fontSize: '2rem', 
+              marginBottom: '1rem',
+              color: 'white'
+            }}>
+              {isSignIn ? 'Hello, Friend!' : 'Welcome Back!'}
+            </h1>
+            <p style={{ 
+              color: 'white',
+              marginBottom: '2rem',
+              maxWidth: '80%',
+              lineHeight: '1.5'
+            }}>
+              {isSignIn 
+                ? 'Enter your personal details and start journey with us' 
+                : 'To keep connected with us please login with your personal info'
+              }
+            </p>
+            <Button
+              variant="outlined"
+              color="inherit"
+              onClick={handleModeSwitch}
+              disabled={isLoading || isAnimating}
+              sx={{
+                borderColor: 'white',
+                color: 'white',
+                borderRadius: '20px',
+                padding: '10px 45px',
+                '&:hover': {
+                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  borderColor: 'white'
+                }
+              }}
+            >
+              {isSignIn ? 'Sign Up' : 'Sign In'}
+            </Button>
+          </div>
+        </GradientOverlay>
+      </Container>
+
+      <ToastContainer
+        position="top-right"
+        autoClose={5000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="dark"
+      />
+    </PageWrapper>,
+    document.getElementById('modal-root')
+  );
 };
 
 export default AuthPage;

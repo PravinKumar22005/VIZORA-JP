@@ -1,23 +1,40 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import AuthPage from './components/Auth/AuthPage';
+import { Routes, Route } from 'react-router-dom';
+import HomePage from './components/HomePage';
+import Dashboard from './components/Dashboard/Dashboard';
 import ChangePassword from './components/Auth/ChangePassword';
 import ProtectedRoute from './components/ProtectedRoute';
+import WelcomeGuard from './components/Auth/WelcomeGuard'; // Import the new guard
 
 function App() {
+  // const shouldPlayVideo = localStorage.getItem('playWelcomeVideo') === 'true'; // This line is removed
+
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<AuthPage />} />
-        <Route 
-          path="/settings" 
-          element={
-            <ProtectedRoute>
-              <ChangePassword />
-            </ProtectedRoute>
-          } 
-        />
-      </Routes>
-    </Router>
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      
+      {/* Use the new WelcomeGuard component for the /welcome route */}
+      <Route 
+        path="/welcome" 
+        element={<WelcomeGuard />} 
+      />
+
+      <Route 
+        path="/dashboard" 
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/change-password" 
+        element={
+          <ProtectedRoute>
+            <ChangePassword />
+          </ProtectedRoute>
+        } 
+      />
+    </Routes>
   );
 }
 
