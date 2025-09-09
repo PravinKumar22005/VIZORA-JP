@@ -2,6 +2,8 @@ from datetime import datetime,timedelta
 from jose import JWTError,jwt 
 from fastapi import HTTPException, Depends
 from fastapi.security import OAuth2PasswordBearer
+from db import SessionLocal
+from models.user import User
 
 SECRET_KEY =""
 ALGORITHM = "HS256"
@@ -17,6 +19,14 @@ def create_access_token(data: dict):
 def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        email = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token: no subject")
+        db = SessionLocal()
+        user = db.query(User).filter(User.email == email).first()
+        db.close()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token") from exc
