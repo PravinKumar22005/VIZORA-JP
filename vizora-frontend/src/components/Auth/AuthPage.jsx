@@ -182,7 +182,7 @@ const AuthPage = ({ onClose }) => {
         localStorage.setItem('token', response.access_token);
         localStorage.setItem('user', JSON.stringify(response.user));
         toast.success('Successfully logged in!');
-        navigate('/dashboard');
+        navigate('/Chatbot');
       } else {
         const response = await api.signup({
           name: formData.name,

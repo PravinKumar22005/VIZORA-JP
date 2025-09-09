@@ -45,7 +45,7 @@ const WelcomeVideo = () => {
 
   const handleVideoEnd = useCallback(() => {
     localStorage.removeItem('playWelcomeVideo');
-    navigate('/dashboard');
+    navigate('/Chatbot');
   }, [navigate]);
 
   useEffect(() => {

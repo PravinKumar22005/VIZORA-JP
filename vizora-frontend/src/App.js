@@ -4,7 +4,7 @@ import Dashboard from './components/Dashboard/Dashboard';
 import ChangePassword from './components/Auth/ChangePassword';
 import ProtectedRoute from './components/ProtectedRoute';
 import WelcomeGuard from './components/Auth/WelcomeGuard'; // Import the new guard
-
+import Chatbot from './components/Chatbot/Chatbot';
 function App() {
   // const shouldPlayVideo = localStorage.getItem('playWelcomeVideo') === 'true'; // This line is removed
 
@@ -23,6 +23,14 @@ function App() {
         element={
           <ProtectedRoute>
             <Dashboard />
+          </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/Chatbot" 
+        element={
+          <ProtectedRoute>
+            <Chatbot />
           </ProtectedRoute>
         } 
       />
