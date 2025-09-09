@@ -3,10 +3,44 @@ import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Search, Plus, Mic, Menu, X, HelpCircle, User, Share2, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, CornerDownLeft, Lock } from 'lucide-react';
 import logoGif from '../../assets/logo.gif'; // Place your GIF here
+import styled from 'styled-components';
+
+const Navbar = styled.nav`
+  background-color: #212121;
+  color: #14FFEC;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+`;
+
+const NavItem = styled.button`
+  background: none;
+  border: none;
+  color: #14FFEC;
+  font-size: 1rem;
+  cursor: pointer;
+  margin: 0 1rem;
+  transition: color 0.3s ease;
+
+  &:hover {
+    color: #0D7377;
+  }
+`;
+
+const NavItems = styled.div`
+  display: flex;
+  gap: 1rem;
+`;
 
 // --- Main Chatbot Component ---
 export default function Chatbot() {
     const navigate = useNavigate();
+
+    const handleNavigation = (path) => {
+        navigate(path);
+    };
 
     // --- User Data ---
     const initialUserData = useMemo(() => {
@@ -319,6 +353,15 @@ export default function Chatbot() {
                 {showFilePreview && <FilePreviewModal key="filePreviewModal" file={showFilePreview} onClose={() => setShowFilePreview(null)} />}
                 {toast.show && <Toast key="toast" message={toast.message} type={toast.type} onClose={() => setToast({ show: false, message: '', type: 'error' })} />}
             </AnimatePresence>
+
+            <Navbar>
+                <h1 style={{ color: '#14FFEC', fontSize: '1.5rem' }}>Vizora AI</h1>
+                <NavItems>
+                    <NavItem onClick={() => handleNavigation('/')}>Home</NavItem>
+                    <NavItem onClick={() => handleNavigation('/chatbot')}>Chatbot</NavItem>
+                    <NavItem onClick={() => handleNavigation('/dashboard')}>Dashboard</NavItem>
+                </NavItems>
+            </Navbar>
         </div>
     );
 }
