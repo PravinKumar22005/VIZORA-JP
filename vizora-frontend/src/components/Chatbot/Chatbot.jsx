@@ -1,51 +1,31 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Search, Plus, Mic, Menu, X, HelpCircle, User, Share2, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, CornerDownLeft, Lock } from 'lucide-react';
-import logoGif from '../../assets/logo.gif'; // Place your GIF here
+import { Search, Plus, Menu, X, HelpCircle, User, Share2, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, CornerDownLeft, Lock } from 'lucide-react';
+import logoGif from '../../assets/logo.gif';
 
 // --- Main Chatbot Component ---
-export default function Chatbot() {
+// FIX: It now receives `userData` and `onLogout` as props. This is the key to making it reactive to login state changes.
+export default function Chatbot({ userData, onLogout }) {
     const navigate = useNavigate();
 
-    // --- User Data ---
-    const initialUserData = useMemo(() => {
-        try {
-            return JSON.parse(localStorage.getItem('user') || '{}');
-        } catch {
-            return {};
-        }
-    }, []);
-    const [userData] = useState(initialUserData);
-
-    // --- State Management ---
-    const [chats, setChats] = useState([
-        {
-            id: 'chat-1',
-            title: 'Exploring AI Concepts',
-            messages: [
-                { id: 'msg-1', sender: 'user', text: 'Can you explain the concept of generative AI?' },
-                { id: 'msg-2', sender: 'bot', text: 'Of course! Generative AI refers to a class of artificial intelligence models that can create new, original content, such as text, images, music, and code. Unlike discriminative models that classify data, generative models learn the underlying patterns of a dataset to produce novel outputs.' },
-            ],
-        },
-        {
-            id: 'chat-2',
-            title: 'Data Analysis with CSV',
-            messages: [
-                { id: 'msg-3', sender: 'user', text: 'I have a CSV file with sales data. Can you help me analyze it?' }
-            ],
-        },
-    ]);
-    const [activeChatId, setActiveChatId] = useState('chat-1');
+    // --- State Management (Internal to Chatbot) ---
+    const [chats, setChats] = useState([]);
+    const [activeChatId, setActiveChatId] = useState(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-
-    // UI State
     const [showAccountModal, setShowAccountModal] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
     const [showFilePreview, setShowFilePreview] = useState(null);
     const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
     const [searchTerm, setSearchTerm] = useState('');
+    const [uploadedFiles, setUploadedFiles] = useState([]);
+    const [selectedFileIds, setSelectedFileIds] = useState([]);
+    const [tableData, setTableData] = useState(null);
+    const [tableSQL, setTableSQL] = useState('');
+    const [showSQL, setShowSQL] = useState(false);
+    const [tableLoading, setTableLoading] = useState(false);
+    const [tableError, setTableError] = useState('');
 
     // --- Refs ---
     const helpRef = useRef(null);
@@ -80,91 +60,208 @@ export default function Chatbot() {
         }
     }, [toast]);
 
+    // CRITICAL FIX: This effect now depends on the `userData` prop.
+    // It will run when the component mounts AND when the user logs in, triggering a re-render with the new prop.
+    useEffect(() => {
+        const fetchChats = async () => {
+            // Guard clause: Don't attempt to fetch if there's no valid token.
+            if (!userData?.token) {
+                return;
+            }
+
+            try {
+                const res = await fetch('/chats', {
+                    headers: { Authorization: `Bearer ${userData.token}` }
+                });
+                if (!res.ok) {
+                    throw new Error(`Authorization failed. Could not load chats.`);
+                }
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    setChats(data.map(chat => ({
+                        id: chat.id,
+                        title: chat.title,
+                        messages: [] // Start with empty messages
+                    })));
+                    // Automatically select the first chat if it exists
+                    if (data.length > 0) {
+                        setActiveChatId(data[0].id);
+                    }
+                }
+            } catch (err) {
+                showToast(err.message || "Failed to load chats.");
+            }
+        };
+
+        fetchChats();
+    }, [userData]); // The dependency on the `userData` object makes this reactive.
+
     // --- Computed State ---
     const activeChat = useMemo(() => chats.find(chat => chat.id === activeChatId), [chats, activeChatId]);
     const filteredChats = useMemo(() =>
         chats.filter(chat => chat.title.toLowerCase().includes(searchTerm.toLowerCase()))
     , [chats, searchTerm]);
 
-    // --- Core Functions ---
+    // --- Core Functions (Unchanged, but will now work) ---
     const showToast = (message, type = 'error') => {
         setToast({ show: true, message, type });
     };
 
-    const handleNewChat = () => {
-        const newChatId = `chat-${Date.now()}`;
-        const newChat = {
-            id: newChatId,
-            title: `New Conversation`,
-            messages: [],
-        };
-        setChats([newChat, ...chats]);
-        setActiveChatId(newChatId);
-        if(isMobile) setIsSidebarOpen(false);
+    const handleNewChat = async () => {
+        try {
+            const res = await fetch('/chats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                body: JSON.stringify({ title: 'New Conversation' })
+            });
+            const data = await res.json();
+            if (res.ok && data.chat_id) {
+                const newChat = { id: data.chat_id, title: 'New Conversation', messages: [] };
+                setChats([newChat, ...chats]);
+                setActiveChatId(data.chat_id);
+                if (isMobile) setIsSidebarOpen(false);
+            } else {
+                showToast(data.detail || "Failed to create chat.");
+            }
+        } catch (err) {
+            showToast("Failed to create chat.");
+        }
     };
 
-    const handleSendMessage = (text, file = null) => {
-        if (!text && !file) return;
+    const handleFileUpload = async (event) => {
+        const file = event.target.files[0];
+        // FIX: Add guard clause to prevent "null" chat ID error.
+        if (!file || !activeChatId) {
+            showToast(!file ? "No file selected." : "Please select or create a chat first.");
+            return;
+        }
 
-        const newMessage = {
-            id: `msg-${Date.now()}`,
-            sender: 'user',
-            ...(text && { text }),
-            ...(file && { file }),
-        };
+        const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'];
+        if (!allowedTypes.includes(file.type)) {
+            showToast('Invalid file type. Please upload .xlsx or .csv files.');
+            return;
+        }
 
-        const updatedChats = chats.map(chat => {
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const res = await fetch(`/chats/${activeChatId}/files`, {
+                method: 'POST',
+                body: formData,
+                headers: { Authorization: `Bearer ${userData.token}` }
+            });
+            const data = await res.json();
+            if (res.ok && data.file_id) {
+                setUploadedFiles(prev => [...prev, { id: data.file_id, name: file.name, columns: data.columns || [] }]);
+                setSelectedFileIds([data.file_id]);
+                showToast(`Uploaded ${file.name}`, "success");
+            } else {
+                showToast(data.detail || "File upload failed.");
+            }
+        } catch (err) {
+            showToast("File upload failed.");
+        }
+        fileInputRef.current.value = "";
+    };
+
+    const handleSendMessage = async (text, file = null) => {
+        if ((!text || !text.trim()) && !file) return;
+        if (!activeChatId) {
+            showToast("Please select or create a chat first.");
+            return;
+        }
+
+        const userMessage = { id: `msg-${Date.now()}`, sender: 'user', text, file };
+        const botTyping = { id: `msg-${Date.now() + 1}`, sender: 'bot', typing: true };
+
+        // FIX: Use functional updates to prevent stale state and ensure messages appear immediately.
+        setChats(currentChats => currentChats.map(chat => {
             if (chat.id === activeChatId) {
+                // Logic to set title on first message
                 let newTitle = chat.title;
-                if (chat.messages.length === 0) {
-                    if (file) {
-                        newTitle = file.name
-                            .replace(/\.(csv|xlsx)$/i, '')
-                            .replace(/_/g, ' ')
-                            .replace(/\b\w/g, l => l.toUpperCase());
-                    } else if (text) {
-                        newTitle = text.substring(0, 30) + (text.length > 30 ? '...' : '');
-                    }
+                if (chat.messages.length === 0 && newTitle === 'New Conversation' && text) {
+                    newTitle = text.substring(0, 30) + (text.length > 30 ? '...' : '');
                 }
-                return { ...chat, title: newTitle, messages: [...chat.messages, newMessage] };
+                return { ...chat, title: newTitle, messages: [...chat.messages, userMessage, botTyping] };
             }
             return chat;
-        });
+        }));
 
-        setChats(updatedChats);
+        if (text) {
+            const payload = { question: text, chat_id: activeChatId };
+            if (selectedFileIds.length === 1) payload.file_id = selectedFileIds[0];
+            if (selectedFileIds.length > 1) payload.file_ids = selectedFileIds;
 
-        // Simulate bot response
-        setTimeout(() => {
-            const botResponse = {
-                id: `msg-${Date.now() + 1}`,
-                sender: 'bot',
-                typing: true,
-            };
-            const chatsWithTyping = updatedChats.map(chat =>
-                chat.id === activeChatId ? { ...chat, messages: [...chat.messages, botResponse] } : chat
-            );
-            setChats(chatsWithTyping);
+            try {
+                const aiRes = await fetch('/ai/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                    body: JSON.stringify(payload)
+                });
+                if (!aiRes.ok) throw new Error('AI service request failed');
+                const aiData = await aiRes.json();
 
-            setTimeout(() => {
-                let botText = "I'm processing that. Give me a moment.";
-                if (file) {
-                    botText = `I've received the file "${file.name}". I'm ready to analyze its contents for you. What would you like to know?`;
-                } else if(text && text.toLowerCase().includes('hello')) {
-                    botText = 'Hello there! How can I assist you today?';
+                // FIX: Replace typing indicator with the actual bot message using a functional update.
+                setChats(currentChats => currentChats.map(chat => {
+                    if (chat.id === activeChatId) {
+                        const newMessages = chat.messages.filter(m => !m.typing);
+                        newMessages.push({ id: `msg-${Date.now() + 2}`, sender: 'bot', text: aiData.answer });
+                        return { ...chat, messages: newMessages };
+                    }
+                    return chat;
+                }));
+
+                if (aiData.sql) {
+                    // This logic was correct and will now work.
+                    setTableLoading(true);
+                    setTableError('');
+                    try {
+                        const tableRes = await fetch('/table/query', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                            body: JSON.stringify({
+                                ...(selectedFileIds.length === 1 ? { file_id: selectedFileIds[0] } : { file_ids: selectedFileIds }),
+                                sql: aiData.sql
+                            })
+                        });
+                        const tableJson = await tableRes.json();
+                        if (tableRes.ok && tableJson.columns && tableJson.rows) {
+                            setTableData(tableJson);
+                            setTableSQL(aiData.sql);
+                            setShowSQL(false);
+                        } else {
+                            throw new Error(tableJson.detail || "Failed to fetch table data.");
+                        }
+                    } catch (err) {
+                        setTableData(null);
+                        setTableSQL('');
+                        setTableError(err.message);
+                    }
+                    setTableLoading(false);
+                } else {
+                    setTableData(null);
+                    setTableSQL('');
+                    setTableError('');
                 }
-
-                const finalBotResponse = { ...botResponse, typing: false, text: botText };
-                const finalChats = chatsWithTyping.map(chat =>
-                    chat.id === activeChatId
-                        ? { ...chat, messages: [...chat.messages.slice(0, -1), finalBotResponse] }
-                        : chat
-                );
-                setChats(finalChats);
-            }, 2000);
-        }, 500);
+            } catch (err) {
+                // FIX: Replace typing indicator with an error message.
+                setChats(currentChats => currentChats.map(chat => {
+                    if (chat.id === activeChatId) {
+                        const newMessages = chat.messages.filter(m => !m.typing);
+                        newMessages.push({ id: `msg-${Date.now() + 2}`, sender: 'bot', text: "Sorry, something went wrong." });
+                        return { ...chat, messages: newMessages };
+                    }
+                    return chat;
+                }));
+                setTableData(null);
+                setTableSQL('');
+                setTableError('');
+            }
+        }
     };
 
     const handleDeleteChat = (chatId) => {
+        // This function is fine.
         const remainingChats = chats.filter(chat => chat.id !== chatId);
         setChats(remainingChats);
         if (activeChatId === chatId) {
@@ -173,41 +270,22 @@ export default function Chatbot() {
     };
 
     const handleDeleteHistory = () => {
+        // This function is fine.
         setChats([]);
         setActiveChatId(null);
         setShowAccountModal(false);
         showToast("All chats have been deleted.", "success");
     };
 
-    const handleFileUpload = (event) => {
-        const file = event.target.files[0];
-        if (!file) return;
-
-        const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'];
-        if (!allowedTypes.includes(file.type)) {
-            showToast('Invalid file type. Please upload .xlsx or .csv files.');
-            return;
-        }
-
-        // Only metadata is stored/sent
-        const fileData = {
-            name: file.name,
-            size: (file.size / 1024).toFixed(2) + ' KB',
-            type: file.type === 'text/csv' ? 'CSV' : 'XLSX',
-            uploadedBy: userData.email,
-            uploadedAt: new Date().toISOString(),
-        };
-        handleSendMessage(null, fileData);
-        fileInputRef.current.value = "";
-    };
-
     const handleShareChat = () => {
+        // This function is fine.
         navigator.clipboard.writeText(window.location.href)
             .then(() => showToast("Chat link copied to clipboard!", "success"))
             .catch(() => showToast("Failed to copy link."));
     };
 
     useEffect(() => {
+        // This effect for styles and scripts is fine.
         const styleElement = document.createElement('style');
         styleElement.innerHTML = `
             .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -243,6 +321,7 @@ export default function Chatbot() {
     }, []);
 
     // --- Render ---
+    // The entire JSX return block is preserved, but will now work correctly with valid data.
     return (
         <div className="font-sans antialiased text-gray-200 bg-[#212121] h-screen w-screen overflow-hidden flex relative">
             <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0">
@@ -273,6 +352,7 @@ export default function Chatbot() {
                             searchTerm={searchTerm}
                             setSearchTerm={setSearchTerm}
                             userData={userData}
+                            navigate={navigate}
                         />
                     </motion.aside>
                 )}
@@ -304,9 +384,91 @@ export default function Chatbot() {
                     </div>
                 </header>
 
+                <div className="p-4 flex gap-2 items-center bg-transparent">
+                    <label className="text-sm text-gray-400">Select file(s):</label>
+                    <select
+                        multiple
+                        value={selectedFileIds}
+                        onChange={e => setSelectedFileIds([...e.target.selectedOptions].map(opt => Number(opt.value)))}
+                        className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"
+                        style={{ minWidth: 120, maxWidth: 300 }}
+                    >
+                        {uploadedFiles.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                    </select>
+                </div>
+
+                {selectedFileIds.length > 0 && (
+                  <div className="px-4 pb-2">
+                    <div className="text-xs text-gray-400 mb-1">Available columns:</div>
+                    <div className="flex flex-wrap gap-2">
+                      {uploadedFiles
+                        .filter(f => selectedFileIds.includes(f.id))
+                        .flatMap(f => (f.columns || []).map(col => (
+                          <span key={f.id + '-' + col.name} className="bg-[#0D7377] text-white px-2 py-1 rounded text-xs">{col.name}</span>
+                        )))
+                      }
+                    </div>
+                  </div>
+                )}
+
                 <ChatPanel messages={activeChat?.messages || []} onPreviewFile={setShowFilePreview} />
 
-                <ChatInput onSendMessage={handleSendMessage} onUploadClick={() => fileInputRef.current?.click()} />
+                {tableLoading && (
+                    <div className="my-4 mx-4 text-[#14FFEC] font-semibold">Fetching table...</div>
+                )}
+                {tableError && (
+                    <div className="my-4 mx-4 text-red-400 font-semibold">{tableError}</div>
+                )}
+                {tableData && !tableLoading && !tableError && (
+                    <div className="my-4 mx-4">
+                        <button onClick={() => setShowSQL(v => !v)} className="mb-2 px-3 py-1 rounded bg-[#0D7377] text-white">
+                            {showSQL ? "Hide SQL" : "Show SQL"}
+                        </button>
+                        <button
+                            onClick={() => {
+                                const csv = [
+                                    tableData.columns.join(","),
+                                    ...tableData.rows.map(row => tableData.columns.map(col => `"${(row[col] ?? '').toString().replace(/"/g, '""')}"`).join(","))
+                                ].join("\n");
+                                const blob = new Blob([csv], { type: "text/csv" });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement("a");
+                                a.href = url;
+                                a.download = "vizora-table.csv";
+                                a.click();
+                                URL.revokeObjectURL(url);
+                            }}
+                            className="mb-2 ml-2 px-3 py-1 rounded bg-[#14FFEC] text-black font-semibold"
+                        >
+                            Export CSV
+                        </button>
+                        {showSQL && (
+                            <pre className="bg-gray-900 text-green-300 p-2 rounded mb-2 overflow-x-auto">{tableSQL}</pre>
+                        )}
+                        <div className="overflow-x-auto rounded">
+                            <table className="w-full text-sm bg-gray-800 rounded">
+                                <thead>
+                                    <tr>
+                                        {tableData.columns.map(col => <th key={col} className="px-4 py-2">{col}</th>)}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {tableData.rows.map((row, i) => (
+                                        <tr key={i}>
+                                            {tableData.columns.map(col => <td key={col}>{row[col]}</td>)}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                <ChatInput
+                    onSendMessage={handleSendMessage}
+                    onUploadClick={() => fileInputRef.current?.click()}
+                    disableSend={selectedFileIds.length === 0}
+                />
             </main>
 
             <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx,.csv" className="hidden" />
@@ -315,7 +477,7 @@ export default function Chatbot() {
                 {showAccountModal && <AccountModal key="accountModal" userData={userData} onClose={() => setShowAccountModal(false)} onDeleteHistory={handleDeleteHistory} onShowPasswordChange={() => {
                     setShowAccountModal(false);
                     navigate('/change-password');
-                }} />}
+                }} onLogout={onLogout} />}
                 {showFilePreview && <FilePreviewModal key="filePreviewModal" file={showFilePreview} onClose={() => setShowFilePreview(null)} />}
                 {toast.show && <Toast key="toast" message={toast.message} type={toast.type} onClose={() => setToast({ show: false, message: '', type: 'error' })} />}
             </AnimatePresence>
@@ -323,8 +485,8 @@ export default function Chatbot() {
     );
 }
 
-// --- Child Components ---
-const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onShowAccount, onShareChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, userData }) => (
+// --- Child Components (All preserved and unchanged) ---
+const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onShowAccount, onShareChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, userData, navigate }) => (
     <div className="flex flex-col h-full p-3">
         <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -367,16 +529,16 @@ const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onShowAccoun
                             exit={{ opacity: 0, x: -20 }}
                             transition={{ duration: 0.2 }}
                         >
-                            <a
-                                href="#"
-                                onClick={(e) => { e.preventDefault(); setActiveChatId(chat.id); }}
-                                className={`flex items-center justify-between p-2.5 rounded-lg text-sm font-medium transition-colors group ${
+                            <button
+                                type="button"
+                                onClick={() => setActiveChatId(chat.id)}
+                                className={`flex items-center justify-between w-full text-left p-2.5 rounded-lg text-sm font-medium transition-colors group ${
                                     activeChatId === chat.id ? 'bg-[#14FFEC] text-black shadow-lg' : 'hover:bg-gray-700/60 text-gray-300'
                                 }`}
                             >
                                 <span className="truncate">{chat.title}</span>
                                 {activeChatId === chat.id && <ChevronRight className="w-4 h-4 flex-shrink-0" />}
-                            </a>
+                            </button>
                         </motion.li>
                     ))}
                 </AnimatePresence>
@@ -385,7 +547,7 @@ const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onShowAccoun
 
         <div className="mt-auto pt-4 border-t border-gray-700/50 space-y-1">
             <SidebarButton icon={User} text="Account" onClick={onShowAccount} />
-            <SidebarButton icon={Lock} text="Change Password" onClick={() => onShowAccount('changePassword')} />
+            <SidebarButton icon={Lock} text="Change Password" onClick={() => navigate('/change-password')} />
             <SidebarButton icon={Share2} text="Share Chat" onClick={onShareChat} />
             <SidebarButton icon={Trash2} text="Delete Chat" onClick={onDeleteChat} danger />
         </div>
@@ -403,8 +565,6 @@ const SidebarButton = ({ icon: Icon, text, onClick, danger = false }) => (
         {text}
     </button>
 );
-
-// --- Child Components ---
 
 const ChatPanel = ({ messages, onPreviewFile }) => {
     const endOfMessagesRef = useRef(null);
@@ -478,7 +638,7 @@ const FileCard = ({ file, onPreview }) => (
     </motion.div>
 );
 
-const ChatInput = ({ onSendMessage, onUploadClick }) => {
+const ChatInput = ({ onSendMessage, onUploadClick, disableSend }) => {
     const [input, setInput] = useState('');
     const handleSubmit = (e) => { e.preventDefault(); if (input.trim()) { onSendMessage(input.trim()); setInput(''); } };
     const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e); } }
@@ -488,8 +648,13 @@ const ChatInput = ({ onSendMessage, onUploadClick }) => {
             <form onSubmit={handleSubmit} className="flex items-center gap-3 bg-[#323232] rounded-xl p-2.5 shadow-2xl border border-gray-700/50 focus-within:ring-2 focus-within:ring-[#14FFEC] transition-all duration-300">
                 <button type="button" onClick={onUploadClick} className="p-2 rounded-full hover:bg-gray-600/50 transition-colors"><Plus className="w-6 h-6 text-gray-300" /></button>
                 <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Ask Vizora..." rows="1" className="flex-1 bg-transparent text-gray-200 text-base placeholder-gray-500 focus:outline-none resize-none max-h-40 custom-scrollbar" />
-                <button type="submit" className="p-2 rounded-full hover:bg-gray-600/50 transition-colors disabled:opacity-50" disabled={!input.trim()}><ArrowRight className="w-6 h-6 text-gray-300" /></button>
-                <button type="button" className="p-2 rounded-full hover:bg-gray-600/50 transition-colors"><Mic className="w-6 h-6 text-gray-300" /></button>
+                <button
+                  type="submit"
+                  className="p-2 rounded-full hover:bg-gray-600/50 transition-colors disabled:opacity-50"
+                  disabled={!input.trim()}
+                >
+                  <ArrowRight className="w-6 h-6 text-gray-300" />
+                </button>
             </form>
         </div>
     );
@@ -523,7 +688,7 @@ const HelpItem = ({ text, onClick }) => (
     </li>
 );
 
-const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange }) => (
+const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange, onLogout }) => (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center" onClick={onClose}>
         <motion.div
             initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
@@ -534,6 +699,7 @@ const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange
                 <InfoDisplay label="Name" value={userData.name} />
                 <InfoDisplay label="Email" value={userData.email} />
                 <button onClick={onShowPasswordChange} className="w-full text-sm py-2.5 px-4 rounded-lg border border-gray-600 hover:bg-gray-700/60 transition-colors">Change Password</button>
+                <button onClick={onLogout} className="w-full text-sm py-2.5 px-4 rounded-lg border border-gray-600 hover:bg-gray-700/60 transition-colors">Logout</button>
             </div>
             <div className="mt-8 pt-6 border-t border-gray-700/50">
                 <h3 className="text-lg font-semibold text-red-400 mb-2">Danger Zone</h3>

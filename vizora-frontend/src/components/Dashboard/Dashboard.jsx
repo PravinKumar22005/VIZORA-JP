@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../../assets/logo.jpg';
 import styled from 'styled-components';
@@ -9,8 +9,7 @@ import {
   ListItemIcon, 
   ListItemText,
   Avatar,
-  Divider,
-  CircularProgress
+  Divider
 } from '@mui/material';
 import {
   Settings,
@@ -97,28 +96,9 @@ const MainContent = styled.main`
   padding: 6rem 2rem 2rem;
 `;
 
-const Dashboard = () => {
+const Dashboard = ({ userData, onLogout }) => {
   const navigate = useNavigate();
   const [anchorEl, setAnchorEl] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [userData, setUserData] = useState(null);
-
-  useEffect(() => {
-    const loadUserData = async () => {
-      try {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
-        setUserData(user);
-      } catch (error) {
-        console.error('Failed to load user data:', error);
-        toast.error('Failed to load user data');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadUserData();
-  }, []);
 
   const handleProfileMenu = (event) => {
     setAnchorEl(event.currentTarget);
@@ -128,12 +108,11 @@ const Dashboard = () => {
     setAnchorEl(null);
   };
 
-  const handleLogout = () => {
+  const handleLogoutClick = () => {
     handleCloseMenu();
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    onLogout(); // Call the logout function from App.js
     toast.success('Logged out successfully');
-    navigate('/');
+    // Navigation will be handled by App.js automatically
   };
 
   const handleChangePassword = () => {
@@ -150,21 +129,6 @@ const Dashboard = () => {
     handleCloseMenu();
     toast.info('Settings page coming soon');
   };
-
-  if (isLoading) {
-    return (
-      <DashboardWrapper>
-        <div style={{ 
-          height: '100vh', 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center' 
-        }}>
-          <CircularProgress sx={{ color: '#14FFEC' }} />
-        </div>
-      </DashboardWrapper>
-    );
-  }
 
   return (
     <DashboardWrapper>
@@ -224,7 +188,7 @@ const Dashboard = () => {
                 <ListItemText>Change Password</ListItemText>
               </MenuItem>
               <Divider sx={{ borderColor: 'rgba(20, 255, 236, 0.1)' }} />
-              <MenuItem onClick={handleLogout}>
+              <MenuItem onClick={handleLogoutClick}>
                 <ListItemIcon>
                   <Logout fontSize="small" />
                 </ListItemIcon>

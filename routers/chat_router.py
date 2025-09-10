@@ -7,6 +7,7 @@ from controllers import chat_controller
 from utils.azure_blob import upload_file_to_azure
 import pandas as pd
 import io
+import math
 
 router = APIRouter()
 
@@ -100,6 +101,19 @@ async def upload_file_metadata(
             summary_stats = df.describe().to_dict()
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type")
+
+        def clean_nans(obj):
+            if isinstance(obj, float) and math.isnan(obj):
+                return None
+            if isinstance(obj, dict):
+                return {k: clean_nans(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [clean_nans(x) for x in obj]
+            return obj
+
+        # Clean NaNs before saving to DB
+        columns = clean_nans(columns)
+        summary_stats = clean_nans(summary_stats)
 
         # 3. Save metadata in DB
         return chat_controller.add_file_metadata(

@@ -116,7 +116,7 @@ const CloseButton = styled.button`
   }
 `;
 
-const AuthPage = ({ onClose }) => {
+const AuthPage = ({ onClose, onLoginSuccess }) => {
   const navigate = useNavigate();
   const [isSignIn, setIsSignIn] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -166,9 +166,7 @@ const AuthPage = ({ onClose }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (isAnimating) return;
-
-    if (!validateForm()) return;
+    if (isAnimating || !validateForm()) return;
 
     setError('');
     setIsLoading(true);
@@ -179,21 +177,21 @@ const AuthPage = ({ onClose }) => {
           email: formData.email,
           password: formData.password
         });
-        localStorage.setItem('token', response.access_token);
-        localStorage.setItem('user', JSON.stringify(response.user));
+        onLoginSuccess(response);
         toast.success('Successfully logged in!');
-        navigate('/Chatbot');
+        // FIX: Delay navigation slightly to allow state to propagate
+        setTimeout(() => navigate('/chatbot'), 100); 
       } else {
         const response = await api.signup({
           name: formData.name,
           email: formData.email,
           password: formData.password
         });
-        localStorage.setItem('token', response.access_token);
-        localStorage.setItem('user', JSON.stringify(response.user));
+        onLoginSuccess(response);
         localStorage.setItem('playWelcomeVideo', 'true');
         toast.success('Account created successfully!');
-        navigate('/welcome');
+        // FIX: Delay navigation slightly here too
+        setTimeout(() => navigate('/welcome'), 100);
       }
     } catch (err) {
       console.error('Auth error:', err);
@@ -209,7 +207,7 @@ const AuthPage = ({ onClose }) => {
     <PageWrapper onClick={onClose}>
       <Container onClick={(e) => e.stopPropagation()}>
         <CloseButton onClick={onClose}>&times;</CloseButton>
-        <FormContainer signin={isSignIn}>
+        <FormContainer $signin={isSignIn}>
           <Form onSubmit={handleSubmit}>
             <PageTitle>{isSignIn ? 'Sign In' : 'Create Account'}</PageTitle>
 
@@ -324,7 +322,7 @@ const AuthPage = ({ onClose }) => {
           </Form>
         </FormContainer>
 
-        <GradientOverlay signin={isSignIn}>
+        <GradientOverlay $signin={isSignIn}>
           <div style={{ 
             padding: '3rem', 
             textAlign: 'center',

@@ -132,7 +132,6 @@ const HomeSection = ({ onTryVizoraClick }) => { // Accept prop to open modal
     );
 };
 
-// ... (keep ProductSection, FaqSection, ContactSection, Footer as they are)
 const ProductSection = () => {
     return (
         <section id="product" className="bg-[#212121]">
@@ -242,7 +241,7 @@ const Footer = () => (
     </footer>
 );
 
-export default function HomePage() {
+export default function HomePage({ onLoginSuccess }) { // Accept onLoginSuccess from App.js
   const [showAuthModal, setShowAuthModal] = useState(false);
 
   return (
@@ -255,7 +254,8 @@ export default function HomePage() {
         <ContactSection />
       </main>
       <Footer />
-      {showAuthModal && <AuthPage onClose={() => setShowAuthModal(false)} />}
+      {/* Pass the onLoginSuccess function down to the AuthPage modal */}
+      {showAuthModal && <AuthPage onClose={() => setShowAuthModal(false)} onLoginSuccess={onLoginSuccess} />}
     </div>
   );
 }
