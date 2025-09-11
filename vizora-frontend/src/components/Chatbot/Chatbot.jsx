@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Search, Plus, Menu, X, HelpCircle, User, Share2, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, CornerDownLeft, Lock } from 'lucide-react';
 import logoGif from '../../assets/logo.gif';
+
+const API = 'http://localhost:8000'; // If you use a proxy, leave as ''; else set to your backend base URL
 
 // --- Main Chatbot Component ---
 // FIX: It now receives `userData` and `onLogout` as props. This is the key to making it reactive to login state changes.
@@ -26,12 +28,23 @@ export default function Chatbot({ userData, onLogout }) {
     const [showSQL, setShowSQL] = useState(false);
     const [tableLoading, setTableLoading] = useState(false);
     const [tableError, setTableError] = useState('');
+    const [pendingFile, setPendingFile] = useState(null);
+    const [previewRows, setPreviewRows] = useState([]);
+    const [showTitleModal, setShowTitleModal] = useState(false);
+    const [pendingTitle, setPendingTitle] = useState('');
 
     // --- Refs ---
     const helpRef = useRef(null);
     const fileInputRef = useRef(null);
 
-    // --- Effects ---
+    // --- Persist active chat ---
+    useEffect(() => {
+        if (activeChatId && userData?.id) {
+            localStorage.setItem(`vizora_active_chat_${userData.id}`, String(activeChatId));
+        }
+    }, [activeChatId, userData?.id]);
+
+    // --- Responsive sidebar ---
     useEffect(() => {
         const handleResize = () => {
             const mobile = window.innerWidth < 768;
@@ -60,100 +73,159 @@ export default function Chatbot({ userData, onLogout }) {
         }
     }, [toast]);
 
-    // CRITICAL FIX: This effect now depends on the `userData` prop.
-    // It will run when the component mounts AND when the user logs in, triggering a re-render with the new prop.
+    // --- Fetch all chats, restore active chat, fetch messages/files ---
     useEffect(() => {
-        const fetchChats = async () => {
-            // Guard clause: Don't attempt to fetch if there's no valid token.
-            if (!userData?.token) {
-                return;
-            }
-
+        if (!userData?.token) {
+            setChats([]);
+            setActiveChatId(null);
+            setUploadedFiles([]);
+            return;
+        }
+        const fetchAll = async () => {
             try {
-                const res = await fetch('/chats', {
+                const res = await fetch(`${API}/chats`, {
                     headers: { Authorization: `Bearer ${userData.token}` }
                 });
-                if (!res.ok) {
-                    throw new Error(`Authorization failed. Could not load chats.`);
-                }
+                if (!res.ok) throw new Error('Could not load chats.');
                 const data = await res.json();
-                if (Array.isArray(data)) {
-                    setChats(data.map(chat => ({
-                        id: chat.id,
-                        title: chat.title,
-                        messages: [] // Start with empty messages
-                    })));
-                    // Automatically select the first chat if it exists
-                    if (data.length > 0) {
-                        setActiveChatId(data[0].id);
-                    }
-                }
+                const chatList = Array.isArray(data) ? data : [];
+                setChats(chatList.map(chat => ({
+                    id: chat.id,
+                    title: chat.title,
+                    messages: []
+                })));
+                // Restore active chat from localStorage or pick first
+                let saved = localStorage.getItem(`vizora_active_chat_${userData.id}`);
+                let chatId = saved && chatList.some(c => String(c.id) === saved) ? Number(saved) : (chatList[0]?.id ?? null);
+                setActiveChatId(chatId);
             } catch (err) {
+                setChats([]);
+                setActiveChatId(null);
+                setUploadedFiles([]);
                 showToast(err.message || "Failed to load chats.");
             }
         };
+        fetchAll();
+    }, [userData]);
 
-        fetchChats();
-    }, [userData]); // The dependency on the `userData` object makes this reactive.
+    // --- Fetch messages and files for active chat ---
+    useEffect(() => {
+        if (!userData?.token || !activeChatId) {
+            setUploadedFiles([]);
+            return;
+        }
+        const fetchDetails = async () => {
+            try {
+                // Messages
+                const msgRes = await fetch(`${API}/chats/${activeChatId}/messages`, {
+                    headers: { Authorization: `Bearer ${userData.token}` }
+                });
+                let messages = [];
+                if (msgRes.ok) messages = await msgRes.json();
+                // Files
+                const fileRes = await fetch(`${API}/chats/${activeChatId}/files`, {
+                    headers: { Authorization: `Bearer ${userData.token}` }
+                });
+                let files = [];
+                if (fileRes.ok) {
+                    files = await fileRes.json();
+                    setUploadedFiles(files.map(f => ({
+                        id: f.id,
+                        name: f.file_name || f.name,
+                        columns: f.columns || []
+                    })));
+                } else {
+                    setUploadedFiles([]);
+                }
+                // Update chat messages
+                setChats(prev =>
+                    prev.map(chat =>
+                        chat.id === activeChatId
+                            ? { ...chat, messages }
+                            : chat
+                    )
+                );
+            } catch (err) {
+                setUploadedFiles([]);
+            }
+        };
+        fetchDetails();
+    }, [userData, activeChatId]);
 
-    // --- Computed State ---
-    const activeChat = useMemo(() => chats.find(chat => chat.id === activeChatId), [chats, activeChatId]);
-    const filteredChats = useMemo(() =>
-        chats.filter(chat => chat.title.toLowerCase().includes(searchTerm.toLowerCase()))
-    , [chats, searchTerm]);
+    // --- Show toast ---
+    const showToast = (message, type = 'error') => setToast({ show: true, message, type });
 
-    // --- Core Functions (Unchanged, but will now work) ---
-    const showToast = (message, type = 'error') => {
-        setToast({ show: true, message, type });
-    };
-
-    const handleNewChat = async () => {
+    // --- Auto-create chat if needed ---
+    const ensureChat = useCallback(async () => {
+        if (activeChatId) return activeChatId;
         try {
-            const res = await fetch('/chats', {
+            const res = await fetch(`${API}/chats`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
                 body: JSON.stringify({ title: 'New Conversation' })
             });
             const data = await res.json();
             if (res.ok && data.chat_id) {
-                const newChat = { id: data.chat_id, title: 'New Conversation', messages: [] };
-                setChats([newChat, ...chats]);
+                setChats(prev => [{ id: data.chat_id, title: data.title || 'New Conversation', messages: [] }, ...prev]);
                 setActiveChatId(data.chat_id);
-                if (isMobile) setIsSidebarOpen(false);
+                return data.chat_id;
             } else {
                 showToast(data.detail || "Failed to create chat.");
+                return null;
             }
         } catch (err) {
             showToast("Failed to create chat.");
+            return null;
         }
-    };
+    }, [activeChatId, userData?.token]);
 
-    const handleFileUpload = async (event) => {
-        const file = event.target.files[0];
-        // FIX: Add guard clause to prevent "null" chat ID error.
-        if (!file || !activeChatId) {
-            showToast(!file ? "No file selected." : "Please select or create a chat first.");
+    // --- File upload (auto-create chat if needed) ---
+    const handleFileUpload = async (fileOrEvent) => {
+        let file;
+        if (fileOrEvent.target) {
+            file = fileOrEvent.target.files[0];
+        } else {
+            file = fileOrEvent;
+        }
+        if (!file) {
+            showToast("No file selected.");
             return;
         }
-
-        const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'];
+        let chatId = activeChatId;
+        if (!chatId) chatId = await ensureChat();
+        if (!chatId) return;
+        const allowedTypes = [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/csv'
+        ];
         if (!allowedTypes.includes(file.type)) {
             showToast('Invalid file type. Please upload .xlsx or .csv files.');
             return;
         }
-
         const formData = new FormData();
         formData.append('file', file);
         try {
-            const res = await fetch(`/chats/${activeChatId}/files`, {
+            const res = await fetch(`${API}/chats/${chatId}/files`, {
                 method: 'POST',
                 body: formData,
                 headers: { Authorization: `Bearer ${userData.token}` }
             });
             const data = await res.json();
             if (res.ok && data.file_id) {
-                setUploadedFiles(prev => [...prev, { id: data.file_id, name: file.name, columns: data.columns || [] }]);
-                setSelectedFileIds([data.file_id]);
+                // Refresh file list from backend
+                const fileRes = await fetch(`${API}/chats/${chatId}/files`, {
+                    headers: { Authorization: `Bearer ${userData.token}` }
+                });
+                let files = [];
+                if (fileRes.ok) {
+                    files = await fileRes.json();
+                    setUploadedFiles(files.map(f => ({
+                        id: f.id,
+                        name: f.file_name || f.name,
+                        columns: f.columns || []
+                    })));
+                    setSelectedFileIds([data.file_id]);
+                }
                 showToast(`Uploaded ${file.name}`, "success");
             } else {
                 showToast(data.detail || "File upload failed.");
@@ -161,107 +233,144 @@ export default function Chatbot({ userData, onLogout }) {
         } catch (err) {
             showToast("File upload failed.");
         }
-        fileInputRef.current.value = "";
+        if (fileInputRef.current) fileInputRef.current.value = "";
     };
 
-    const handleSendMessage = async (text, file = null) => {
-        if ((!text || !text.trim()) && !file) return;
-        if (!activeChatId) {
-            showToast("Please select or create a chat first.");
-            return;
+    // --- File select for preview ---
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        // Parse CSV/XLSX for preview (use PapaParse/XLSX)
+        if (file.type === "text/csv") {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                if (window.Papa) {
+                    const result = window.Papa.parse(evt.target.result, { header: true, skipEmptyLines: true });
+                    setPreviewRows(result.data.slice(0, 5));
+                    setPendingFile(file);
+                }
+            };
+            reader.readAsText(file);
+        } else if (
+            file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ) {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                if (window.XLSX) {
+                    const wb = window.XLSX.read(evt.target.result, { type: "binary" });
+                    const sheetName = wb.SheetNames[0];
+                    const ws = wb.Sheets[sheetName];
+                    const jsonData = window.XLSX.utils.sheet_to_json(ws, { header: 1 });
+                    const headers = jsonData[0] || [];
+                    const rows = jsonData.slice(1, 6).map(row =>
+                        headers.reduce((obj, h, i) => ({ ...obj, [h]: row[i] }), {})
+                    );
+                    setPreviewRows(rows);
+                    setPendingFile(file);
+                }
+            };
+            reader.readAsBinaryString(file);
         }
+    };
+
+    // --- Send message (auto-create chat if needed) ---
+    const handleSendMessage = async (text, file = null) => {
+        if (!text || !text.trim()) return;
+        let chatId = activeChatId;
+        if (!chatId) chatId = await ensureChat();
+        if (!chatId) return;
 
         const userMessage = { id: `msg-${Date.now()}`, sender: 'user', text, file };
         const botTyping = { id: `msg-${Date.now() + 1}`, sender: 'bot', typing: true };
 
-        // FIX: Use functional updates to prevent stale state and ensure messages appear immediately.
-        setChats(currentChats => currentChats.map(chat => {
-            if (chat.id === activeChatId) {
-                // Logic to set title on first message
-                let newTitle = chat.title;
-                if (chat.messages.length === 0 && newTitle === 'New Conversation' && text) {
-                    newTitle = text.substring(0, 30) + (text.length > 30 ? '...' : '');
+        setChats(currentChats => currentChats.map(chat =>
+            chat.id === chatId
+                ? { ...chat, messages: [...chat.messages, userMessage, botTyping] }
+                : chat
+        ));
+
+        // Only send file_ids if user selected files
+        const payload = {
+            question: text,
+            chat_id: chatId,
+            ...(selectedFileIds.length > 0 ? { file_ids: selectedFileIds } : {})
+        };
+
+        try {
+            const aiRes = await fetch(`${API}/ai/ask`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                body: JSON.stringify(payload)
+            });
+            if (!aiRes.ok) throw new Error('AI service request failed');
+            const aiData = await aiRes.json();
+
+            setChats(currentChats => currentChats.map(chat => {
+                if (chat.id === chatId) {
+                    const newMessages = chat.messages.filter(m => !m.typing);
+                    newMessages.push({
+                        id: `msg-${Date.now() + 2}`,
+                        sender: 'bot',
+                        text: aiData.answer,
+                        table: aiData.table,
+                        chart: aiData.chart,
+                        chartType: aiData.chartType,
+                        sql: aiData.sql
+                    });
+                    // Update chat title if backend provides it
+                    return { ...chat, messages: newMessages, title: aiData.title || chat.title };
                 }
-                return { ...chat, title: newTitle, messages: [...chat.messages, userMessage, botTyping] };
-            }
-            return chat;
-        }));
+                return chat;
+            }));
 
-        if (text) {
-            const payload = { question: text, chat_id: activeChatId };
-            if (selectedFileIds.length === 1) payload.file_id = selectedFileIds[0];
-            if (selectedFileIds.length > 1) payload.file_ids = selectedFileIds;
-
-            try {
-                const aiRes = await fetch('/ai/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                    body: JSON.stringify(payload)
-                });
-                if (!aiRes.ok) throw new Error('AI service request failed');
-                const aiData = await aiRes.json();
-
-                // FIX: Replace typing indicator with the actual bot message using a functional update.
-                setChats(currentChats => currentChats.map(chat => {
-                    if (chat.id === activeChatId) {
-                        const newMessages = chat.messages.filter(m => !m.typing);
-                        newMessages.push({ id: `msg-${Date.now() + 2}`, sender: 'bot', text: aiData.answer });
-                        return { ...chat, messages: newMessages };
+            // Only fetch table if SQL is present and user selected files
+            if (aiData.sql && selectedFileIds.length > 0) {
+                setTableLoading(true);
+                setTableError('');
+                try {
+                    const tableRes = await fetch(`${API}/table/query`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                        body: JSON.stringify({
+                            ...(selectedFileIds.length === 1 ? { file_id: selectedFileIds[0] } : { file_ids: selectedFileIds }),
+                            sql: aiData.sql
+                        })
+                    });
+                    const tableJson = await tableRes.json();
+                    if (tableRes.ok && tableJson.columns && tableJson.rows) {
+                        setTableData(tableJson);
+                        setTableSQL(aiData.sql);
+                        setShowSQL(false);
+                    } else {
+                        throw new Error(tableJson.detail || "Failed to fetch table data.");
                     }
-                    return chat;
-                }));
-
-                if (aiData.sql) {
-                    // This logic was correct and will now work.
-                    setTableLoading(true);
-                    setTableError('');
-                    try {
-                        const tableRes = await fetch('/table/query', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                            body: JSON.stringify({
-                                ...(selectedFileIds.length === 1 ? { file_id: selectedFileIds[0] } : { file_ids: selectedFileIds }),
-                                sql: aiData.sql
-                            })
-                        });
-                        const tableJson = await tableRes.json();
-                        if (tableRes.ok && tableJson.columns && tableJson.rows) {
-                            setTableData(tableJson);
-                            setTableSQL(aiData.sql);
-                            setShowSQL(false);
-                        } else {
-                            throw new Error(tableJson.detail || "Failed to fetch table data.");
-                        }
-                    } catch (err) {
-                        setTableData(null);
-                        setTableSQL('');
-                        setTableError(err.message);
-                    }
-                    setTableLoading(false);
-                } else {
+                } catch (err) {
                     setTableData(null);
                     setTableSQL('');
-                    setTableError('');
+                    setTableError(err.message);
                 }
-            } catch (err) {
-                // FIX: Replace typing indicator with an error message.
-                setChats(currentChats => currentChats.map(chat => {
-                    if (chat.id === activeChatId) {
-                        const newMessages = chat.messages.filter(m => !m.typing);
-                        newMessages.push({ id: `msg-${Date.now() + 2}`, sender: 'bot', text: "Sorry, something went wrong." });
-                        return { ...chat, messages: newMessages };
-                    }
-                    return chat;
-                }));
+                setTableLoading(false);
+            } else {
                 setTableData(null);
                 setTableSQL('');
                 setTableError('');
             }
+        } catch (err) {
+            setChats(currentChats => currentChats.map(chat => {
+                if (chat.id === chatId) {
+                    const newMessages = chat.messages.filter(m => !m.typing);
+                    newMessages.push({ id: `msg-${Date.now() + 2}`, sender: 'bot', text: "Sorry, something went wrong." });
+                    return { ...chat, messages: newMessages };
+                }
+                return chat;
+            }));
+            setTableData(null);
+            setTableSQL('');
+            setTableError('');
         }
     };
 
     const handleDeleteChat = (chatId) => {
-        // This function is fine.
         const remainingChats = chats.filter(chat => chat.id !== chatId);
         setChats(remainingChats);
         if (activeChatId === chatId) {
@@ -270,7 +379,6 @@ export default function Chatbot({ userData, onLogout }) {
     };
 
     const handleDeleteHistory = () => {
-        // This function is fine.
         setChats([]);
         setActiveChatId(null);
         setShowAccountModal(false);
@@ -278,14 +386,86 @@ export default function Chatbot({ userData, onLogout }) {
     };
 
     const handleShareChat = () => {
-        // This function is fine.
         navigator.clipboard.writeText(window.location.href)
             .then(() => showToast("Chat link copied to clipboard!", "success"))
             .catch(() => showToast("Failed to copy link."));
     };
 
+    // --- Filtered chat list for sidebar search
+    const filteredChats = useMemo(
+        () =>
+            chats.filter(chat =>
+                (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())
+            ),
+        [chats, searchTerm]
+    );
+
+    // --- Find the active chat object
+    const activeChat = useMemo(
+        () => chats.find(chat => chat.id === activeChatId),
+        [chats, activeChatId]
+    );
+
+    // --- Chat title editing ---
+    const [editingTitle, setEditingTitle] = useState(false);
+    const [titleInput, setTitleInput] = useState('');
     useEffect(() => {
-        // This effect for styles and scripts is fine.
+        if (editingTitle && activeChat) setTitleInput(activeChat.title || '');
+    }, [editingTitle, activeChat]);
+    const saveTitle = async () => {
+        if (!activeChat || !titleInput.trim() || titleInput === activeChat.title) {
+            setEditingTitle(false);
+            return;
+        }
+        try {
+            const res = await fetch(`${API}/chats/${activeChat.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                body: JSON.stringify({ title: titleInput })
+            });
+            if (res.ok) {
+                setChats(prev => prev.map(c => c.id === activeChat.id ? { ...c, title: titleInput } : c));
+            } else {
+                showToast('Failed to update title.');
+            }
+        } catch {
+            showToast('Failed to update title.');
+        }
+        setEditingTitle(false);
+    };
+
+    // --- Create a new chat and set as active
+    const handleNewChat = useCallback(async () => {
+        setShowTitleModal(true);
+    }, []);
+
+    const confirmNewChat = async () => {
+        if (!pendingTitle.trim()) {
+            showToast("Chat title cannot be empty.");
+            return;
+        }
+        try {
+            const res = await fetch(`${API}/chats`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
+                body: JSON.stringify({ title: pendingTitle })
+            });
+            const data = await res.json();
+            if (res.ok && data.chat_id) {
+                setChats(prev => [{ id: data.chat_id, title: data.title || 'New Conversation', messages: [] }, ...prev]);
+                setActiveChatId(data.chat_id);
+                setPendingTitle('');
+                setShowTitleModal(false);
+            } else {
+                showToast(data.detail || "Failed to create chat.");
+            }
+        } catch (err) {
+            showToast("Failed to create chat.");
+        }
+    };
+
+    // --- Style/script injection (unchanged) ---
+    useEffect(() => {
         const styleElement = document.createElement('style');
         styleElement.innerHTML = `
             .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -359,30 +539,51 @@ export default function Chatbot({ userData, onLogout }) {
             </AnimatePresence>
 
             <main className="flex-1 flex flex-col h-full z-10 relative">
-                <header className="flex items-center justify-between p-4 border-b border-gray-700/50 bg-[#212121]/50 backdrop-blur-sm">
-                    <div className="flex items-center gap-3">
-                        {!isSidebarOpen && (
-                            <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
-                                <Menu className="w-6 h-6 text-gray-300" />
-                            </button>
-                        )}
-                        <h1 className="text-xl font-semibold text-white">{activeChat?.title || 'Vizora Chat'}</h1>
-                    </div>
-                    <div className="relative" ref={helpRef}>
-                        <button onClick={() => setShowHelp(prev => !prev)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
-                            <HelpCircle className="w-6 h-6 text-gray-300" />
-                        </button>
-                        <AnimatePresence>
-                            {showHelp && <HelpDropdown onAction={(action) => {
-                                if (action === 'newChat') handleNewChat();
-                                if (action === 'account') setShowAccountModal(true);
-                                if (action === 'clear') handleDeleteHistory();
-                                if (action === 'upload') fileInputRef.current?.click();
-                                setShowHelp(false);
-                            }} />}
-                        </AnimatePresence>
-                    </div>
-                </header>
+                                <header className="flex items-center justify-between p-4 border-b border-gray-700/50 bg-[#212121]/50 backdrop-blur-sm">
+                                        <div className="flex items-center gap-3">
+                                                {!isSidebarOpen && (
+                                                        <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
+                                                                <Menu className="w-6 h-6 text-gray-300" />
+                                                        </button>
+                                                )}
+                                                <h1 className="text-xl font-semibold text-white flex items-center gap-2">
+                                                    {editingTitle ? (
+                                                        <input
+                                                            className="bg-transparent border-b border-[#14FFEC] text-white px-2 outline-none"
+                                                            value={titleInput}
+                                                            onChange={e => setTitleInput(e.target.value)}
+                                                            onBlur={saveTitle}
+                                                            onKeyDown={e => { if (e.key === 'Enter') saveTitle(); }}
+                                                            autoFocus
+                                                            style={{ minWidth: 80 }}
+                                                        />
+                                                    ) : (
+                                                        <>
+                                                            {activeChat?.title || 'Vizora Chat'}
+                                                            {activeChat && (
+                                                                <button onClick={() => setEditingTitle(true)} className="ml-1 text-[#14FFEC] hover:text-white" title="Rename chat">
+                                                                    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M15.232 5.232l3.536 3.536M9 11l6.586-6.586a2 2 0 112.828 2.828L11.828 13.828a2 2 0 01-2.828 0L9 13V11z"></path></svg>
+                                                                </button>
+                                                            )}
+                                                        </>
+                                                    )}
+                                                </h1>
+                                        </div>
+                                        <div className="relative" ref={helpRef}>
+                                                <button onClick={() => setShowHelp(prev => !prev)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
+                                                        <HelpCircle className="w-6 h-6 text-gray-300" />
+                                                </button>
+                                                <AnimatePresence>
+                                                        {showHelp && <HelpDropdown onAction={(action) => {
+                                                                if (action === 'newChat') handleNewChat();
+                                                                if (action === 'account') setShowAccountModal(true);
+                                                                if (action === 'clear') handleDeleteHistory();
+                                                                if (action === 'upload') fileInputRef.current?.click();
+                                                                setShowHelp(false);
+                                                        }} />}
+                                                </AnimatePresence>
+                                        </div>
+                                </header>
 
                 <div className="p-4 flex gap-2 items-center bg-transparent">
                     <label className="text-sm text-gray-400">Select file(s):</label>
@@ -467,11 +668,11 @@ export default function Chatbot({ userData, onLogout }) {
                 <ChatInput
                     onSendMessage={handleSendMessage}
                     onUploadClick={() => fileInputRef.current?.click()}
-                    disableSend={selectedFileIds.length === 0}
+                    disableSend={false}
                 />
             </main>
 
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx,.csv" className="hidden" />
+            <input type="file" ref={fileInputRef} onChange={e => { handleFileSelect(e); }} accept=".xlsx,.csv" className="hidden" />
 
             <AnimatePresence>
                 {showAccountModal && <AccountModal key="accountModal" userData={userData} onClose={() => setShowAccountModal(false)} onDeleteHistory={handleDeleteHistory} onShowPasswordChange={() => {
@@ -481,6 +682,28 @@ export default function Chatbot({ userData, onLogout }) {
                 {showFilePreview && <FilePreviewModal key="filePreviewModal" file={showFilePreview} onClose={() => setShowFilePreview(null)} />}
                 {toast.show && <Toast key="toast" message={toast.message} type={toast.type} onClose={() => setToast({ show: false, message: '', type: 'error' })} />}
             </AnimatePresence>
+
+            {pendingFile && (
+              <FileUploadPreviewModal
+                file={pendingFile}
+                previewRows={previewRows}
+                onCancel={() => setPendingFile(null)}
+                onConfirm={async () => {
+                  await handleFileUpload(pendingFile);
+                  setPendingFile(null);
+                  setPreviewRows([]);
+                }}
+              />
+            )}
+
+            {showTitleModal && (
+              <TitleModal
+                onClose={() => setShowTitleModal(false)}
+                onConfirm={confirmNewChat}
+                value={pendingTitle}
+                onChange={setPendingTitle}
+              />
+            )}
         </div>
     );
 }
@@ -607,21 +830,19 @@ const UserMessage = ({ message, onPreviewFile }) => (
 );
 
 const BotMessage = ({ message }) => (
-    <div className="flex items-start gap-3">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] flex-shrink-0"></div>
-        <div className="bg-[#323232] rounded-xl rounded-bl-none p-4 max-w-lg">
-            {message.typing ? <TypingIndicator /> : <p className="text-white text-base leading-relaxed">{message.text}</p>}
-        </div>
-    </div>
+  <div>
+    <div>{message.text}</div>
+    {message.table && <TableComponent data={message.table} />}
+    {message.chart && <ChartComponent data={message.chart} type={message.chartType} />}
+    {message.sql && (
+      <details>
+        <summary>Show SQL</summary>
+        <pre>{message.sql}</pre>
+      </details>
+    )}
+  </div>
 );
 
-const TypingIndicator = () => (
-    <div className="flex items-center gap-1.5">
-        <motion.div className="w-2 h-2 bg-gray-400 rounded-full" animate={{ scale: [1, 1.2, 1], y: [0, -2, 0] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }} />
-        <motion.div className="w-2 h-2 bg-gray-400 rounded-full" animate={{ scale: [1, 1.2, 1], y: [0, -2, 0] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.2 }} />
-        <motion.div className="w-2 h-2 bg-gray-400 rounded-full" animate={{ scale: [1, 1.2, 1], y: [0, -2, 0] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.4 }} />
-    </div>
-);
 
 const FileCard = ({ file, onPreview }) => (
     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mt-3 bg-black/30 rounded-lg p-3 flex items-center gap-3">
@@ -782,12 +1003,18 @@ const FilePreviewModal = ({ file, onClose }) => {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={onClose}>
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} className="bg-[#212121] rounded-xl w-full max-w-4xl h-[90vh] flex flex-col border border-gray-700/50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <header className="p-4 flex items-center justify-between border-b border-gray-700/50 flex-shrink-0">
-                    <h2 className="text-xl font-bold text-white truncate">{file.name}</h2>
-                    <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
+                    <h2 className="text-xl font-bold mb-2 text-white truncate">{file.name}</h2>
+                    <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors">
+                        <X className="w-5 h-5" />
+                    </button>
                 </header>
 
                 <div className="p-4 flex-shrink-0 flex flex-col md:flex-row gap-4 items-center">
-                    {workbook && (<select value={activeSheet} onChange={(e) => handleSheetChange(parseInt(e.target.value))} className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">{workbook.SheetNames.map((name, index) => (<option key={name} value={index}>{name}</option>))}</select>)}
+                    {workbook && (
+                        <select value={activeSheet} onChange={(e) => handleSheetChange(parseInt(e.target.value))} className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
+                            {workbook.SheetNames.map((name, index) => (<option key={name} value={index}>{name}</option>))}
+                        </select>
+                    )}
                     <div className="relative flex-grow w-full md:w-auto">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                         <input type="text" placeholder="Search table..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"/>
@@ -817,9 +1044,161 @@ const FilePreviewModal = ({ file, onClose }) => {
 };
 
 const Toast = ({ message, type, onClose }) => (
-    <motion.div layout initial={{ opacity: 0, y: 50, scale: 0.3 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.5 }} className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 p-4 rounded-lg shadow-2xl border ${ type === 'error' ? 'bg-red-500/20 border-red-500/30 text-red-300' : 'bg-green-500/20 border-green-500/30 text-green-300' }`}>
+    <motion.div
+        layout
+        initial={{ opacity: 0, y: 50, scale: 0.3 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 20, scale: 0.5 }}
+        className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 p-4 rounded-lg shadow-2xl border ${
+            type === 'error'
+                ? 'bg-red-500/20 border-red-500/30 text-red-300'
+                : 'bg-green-500/20 border-green-500/30 text-green-300'
+        }`}
+    >
         {type === 'error' ? <FileX2 className="w-6 h-6" /> : <CornerDownLeft className="w-6 h-6" />}
         <p className="font-semibold">{message}</p>
-        <button onClick={onClose} className="p-1 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-4 h-4" /></button>
+        <button onClick={onClose} className="p-1 rounded-full hover:bg-gray-700/80 transition-colors">
+            <X className="w-4 h-4" />
+        </button>
     </motion.div>
 );
+
+const TitleModal = ({ onClose, onConfirm, value, onChange }) => (
+  <motion.div
+    initial={{ opacity: 0 }}
+    animate={{ opacity: 1 }}
+    exit={{ opacity: 0 }}
+    className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
+    onClick={onClose}
+  >
+    <motion.div
+      initial={{ scale: 0.9, y: 20 }}
+      animate={{ scale: 1, y: 0 }}
+      exit={{ scale: 0.9, y: 20 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+      className="bg-[#323232] rounded-xl w-full max-w-md p-6 border border-gray-700/50 shadow-2xl relative"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"
+      >
+        <X className="w-5 h-5" />
+      </button>
+      <h2 className="text-2xl font-bold mb-4 text-white">New Chat Title</h2>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-[#14FFEC] mb-4"
+        placeholder="Enter a title for the new chat"
+      />
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onClose}
+          className="flex-1 bg-gray-700 rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-gray-600 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          className="flex-1 bg-[#0D7377] rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-[#14FFEC] transition-colors"
+        >
+          Create Chat
+        </button>
+      </div>
+    </motion.div>
+  </motion.div>
+);
+
+
+
+// --- FileUploadPreviewModal ---
+const FileUploadPreviewModal = ({ file, previewRows, onCancel, onConfirm }) => (
+  <motion.div
+    initial={{ opacity: 0 }}
+    animate={{ opacity: 1 }}
+    exit={{ opacity: 0 }}
+    className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
+    onClick={onCancel}
+  >
+    <motion.div
+      initial={{ scale: 0.9, y: 20 }}
+      animate={{ scale: 1, y: 0 }}
+      exit={{ scale: 0.9, y: 20 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+      className="bg-[#323232] rounded-xl w-full max-w-2xl p-6 border border-gray-700/50 shadow-2xl relative"
+      onClick={e => e.stopPropagation()}
+    >
+      <button
+        onClick={onCancel}
+        className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"
+      >
+        <X className="w-5 h-5" />
+      </button>
+      <h2 className="text-xl font-bold mb-4 text-white">Preview: {file.name}</h2>
+      <div className="overflow-x-auto mb-4">
+        <table className="w-full text-sm bg-gray-800 rounded">
+          <thead>
+            <tr>
+              {previewRows[0] && Object.keys(previewRows[0]).map(h => (
+                <th key={h} className="px-4 py-2">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {previewRows.map((row, i) => (
+              <tr key={i}>
+                {Object.values(row).map((val, j) => (
+                  <td key={j} className="px-4 py-2">{String(val)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          className="bg-gray-700 rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-gray-600 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          className="bg-[#0D7377] rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-[#14FFEC] transition-colors"
+        >
+          Upload
+        </button>
+      </div>
+    </motion.div>
+  </motion.div>
+);
+
+// --- TableComponent and ChartComponent (dummy, replace with real chart/table if needed) ---
+const TableComponent = ({ data }) => (
+  <div className="overflow-x-auto my-2">
+    <table className="w-full text-sm bg-gray-800 rounded">
+      <thead>
+        <tr>
+          {data.columns.map(col => <th key={col} className="px-4 py-2">{col}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {data.rows.map((row, i) => (
+          <tr key={i}>
+            {data.columns.map(col => <td key={col}>{row[col]}</td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const ChartComponent = ({ data, type }) => (
+  <div className="my-2 p-4 bg-gray-900 rounded text-gray-300">
+    {/* Replace with real chart rendering */}
+    <div>[{type} chart preview here]</div>
+  </div>
+);
+
