@@ -1394,28 +1394,76 @@ export default function App() {
     const renderAppState = () => {
         if (!libraries) return <div className="min-h-screen flex items-center justify-center"><div className="flex flex-col items-center justify-center space-y-4"><div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-[#14FFEC]"></div><p className="text-[#14FFEC] text-lg font-semibold">Loading Libraries...</p></div></div>;
 
-        // Show user dashboards list on upload screen
+
+        // Sidebar for user dashboards (always visible on upload and after upload)
+        const DashboardsSidebar = () => (
+            <aside className="bg-[#232323] w-72 min-h-screen p-6 flex flex-col gap-6 border-r border-gray-700">
+                <div>
+                    <h2 className="text-2xl font-bold mb-4 text-white">Your Dashboards</h2>
+                    {dashboardsLoading ? (
+                        <LoadingSpinner text="Loading dashboards..." />
+                    ) : userDashboards.length === 0 ? (
+                        <div className="text-gray-400">No dashboards found. Upload a file to create one.</div>
+                    ) : (
+                        <ul className="space-y-2">
+                            {userDashboards.map(d => (
+                                <li key={d.id} className="bg-[#232323] rounded-lg p-4 flex items-center justify-between cursor-pointer hover:bg-[#2a2a2a] transition"
+                                    onClick={() => {
+                                        setIsReadOnly(false);
+                                        setDashboardName(d.dashboard_name);
+                                        setCleanedData(d.cleaned_data || []);
+                                        setOriginalData(d.cleaned_data || []);
+                                        setAppState('dashboard');
+                                    }}
+                                >
+                                    <span className="font-semibold text-white">{d.dashboard_name}</span>
+                                    <span className="text-xs text-gray-400 ml-2">{new Date(d.created_at).toLocaleString()}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            </aside>
+        );
+
+        // Show upload screen with sidebar
         if (appState === 'upload') {
             return (
-                <div className="max-w-4xl mx-auto py-10">
-                    <FileUploadScreen onFileProcessed={handleFileProcessed} XLSX={libraries?.XLSX} onShowViewShared={() => setShowViewSharedModal(true)} />
-                    <Panel className="mt-8">
-                        <h2 className="text-2xl font-bold mb-4 text-white">Your Dashboards</h2>
-                        {dashboardsLoading ? (
-                            <LoadingSpinner text="Loading dashboards..." />
-                        ) : userDashboards.length === 0 ? (
-                            <div className="text-gray-400">No dashboards found. Upload a file to create one.</div>
-                        ) : (
-                            <ul className="space-y-2">
-                                {userDashboards.map(d => (
-                                    <li key={d.id} className="bg-[#232323] rounded-lg p-4 flex items-center justify-between">
-                                        <span className="font-semibold text-white">{d.dashboard_name}</span>
-                                        <span className="text-xs text-gray-400 ml-2">{new Date(d.created_at).toLocaleString()}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </Panel>
+                <div className="flex">
+                    <DashboardsSidebar />
+                    <div className="flex-1">
+                        <FileUploadScreen onFileProcessed={handleFileProcessed} XLSX={libraries?.XLSX} onShowViewShared={() => setShowViewSharedModal(true)} />
+                    </div>
+                </div>
+            );
+        }
+
+        // Show sidebar after upload as well (mode_selection, auto_progress, manual_wizard, dashboard)
+        const mainAppStates = ['mode_selection', 'auto_progress', 'manual_wizard', 'dashboard'];
+        if (mainAppStates.includes(appState)) {
+            let mainContent = null;
+            switch (appState) {
+                case 'mode_selection':
+                    mainContent = (<div className="flex flex-col items-center justify-center min-h-screen p-4"><h1 className="text-4xl font-bold text-white mb-6">Choose Cleaning Mode</h1><Panel className="w-full max-w-md space-y-6"><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Auto Mode</h2><p className="text-gray-300 mt-2">Let Vizora automatically clean your data. Ideal for quick results and best practices.</p><PrimaryButton onClick={() => setAppState('auto_progress')} className="mt-4 w-full">Start Auto Cleaning</PrimaryButton></div><div className="border-t border-gray-600"></div><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Manual Mode</h2><p className="text-gray-300 mt-2">A step-by-step wizard for full control over the cleaning process.</p><PrimaryButton onClick={() => setAppState('manual_wizard')} className="mt-4 w-full">Start Manual Wizard</PrimaryButton></div></Panel></div>);
+                    break;
+                case 'auto_progress':
+                    mainContent = <AutoCleaningProgress data={originalData} onCleaningComplete={handleCleaningComplete} addToLog={addToLog} />;
+                    break;
+                case 'manual_wizard':
+                    mainContent = <ManualCleaningWizard originalData={originalData} onCleaningComplete={handleCleaningComplete} addToLog={addToLog} />;
+                    break;
+                case 'dashboard':
+                    mainContent = <Dashboard dashboardName={dashboardName} setDashboardName={setDashboardName} cleanedData={cleanedData} setCleanedData={setCleanedData} onReset={handleReset} libraries={libraries} addToLog={addToLog} isReadOnly={false} onLoadShared={handleLoadShared} onShowViewShared={() => setShowViewSharedModal(true)} />;
+                    break;
+                default:
+                    mainContent = null;
+            }
+            return (
+                <div className="flex">
+                    <DashboardsSidebar />
+                    <div className="flex-1">
+                        {mainContent}
+                    </div>
                 </div>
             );
         }
