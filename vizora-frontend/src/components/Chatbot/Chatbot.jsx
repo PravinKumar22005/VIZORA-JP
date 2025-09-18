@@ -540,7 +540,7 @@ export default function Chatbot({ userData, onLogout }) {
 
             <main className="flex-1 flex flex-col h-full z-10 relative">
                                 <header className="flex items-center justify-between p-4 border-b border-gray-700/50 bg-[#212121]/50 backdrop-blur-sm">
-                                        <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-3 w-full">
                                                 {!isSidebarOpen && (
                                                         <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
                                                                 <Menu className="w-6 h-6 text-gray-300" />
@@ -568,6 +568,16 @@ export default function Chatbot({ userData, onLogout }) {
                                                         </>
                                                     )}
                                                 </h1>
+                                                {/* Navigation Bar */}
+                                                <nav className="ml-6 flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => navigate('/dashboard')}
+                                                        className="px-3 py-1 rounded bg-[#0D7377] text-white hover:bg-[#14FFEC] hover:text-black transition-colors"
+                                                        title="Go to Dashboard"
+                                                    >
+                                                        Dashboard
+                                                    </button>
+                                                </nav>
                                         </div>
                                         <div className="relative" ref={helpRef}>
                                                 <button onClick={() => setShowHelp(prev => !prev)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">

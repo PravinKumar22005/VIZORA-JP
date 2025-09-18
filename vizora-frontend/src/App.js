@@ -32,6 +32,7 @@ function App() {
       token: loginResponse.access_token
     };
     localStorage.setItem('user', JSON.stringify(fullUserData));
+    localStorage.setItem('token', loginResponse.access_token);
     setUserData(fullUserData);
   };
 
