@@ -1,50 +1,60 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { chatApi } from '../../services/chatApi';
+// Sharing API
+import { shareChat as shareChatApi, getSharedChat as getSharedChatApi } from '../../services/sharingApi';
+import { aiApi } from '../../services/aiApi';
+import { tableQueryApi } from '../../services/tableQueryApi';
+import { dashboardApi } from '../../services/dashboardApi';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Search, Plus, Menu, X, HelpCircle, User, Share2, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, CornerDownLeft, Lock } from 'lucide-react';
-import logoGif from '../../assets/logo.gif';
+import { Search, Plus, Menu, X, User, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, Clipboard, Eye, LayoutDashboard, LifeBuoy, Paperclip, Send, AlertTriangle, Settings, MailOpen, Pencil, LogOut, Info } from 'lucide-react';
+// Note: PapaParse and XLSX are assumed to be loaded via script tags.
 
-const API = 'http://localhost:8000'; // If you use a proxy, leave as ''; else set to your backend base URL
+const BotAvatar = () => (
+    <div className="w-8 h-8 rounded-full flex-shrink-0 bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] p-1.5 flex items-center justify-center">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+            <path d="M21 15C21 15.5304 20.7893 16.0391 20.4142 16.4142C20.0391 16.7893 19.5304 17 19 17H7L3 21V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H19C19.5304 3 20.0391 3.21071 20.4142 3.58579C20.7893 3.96086 21 4.46957 21 5V15Z" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    </div>
+);
 
-// --- Main Chatbot Component ---
-// FIX: It now receives `userData` and `onLogout` as props. This is the key to making it reactive to login state changes.
-export default function Chatbot({ userData, onLogout }) {
-    const navigate = useNavigate();
 
-    // --- State Management (Internal to Chatbot) ---
-    const [chats, setChats] = useState([]);
+// --- Main App Component ---
+export default function App({ userData: externalUserData }) {
+    // --- State Management ---
+    const [chats, setChats] = useState([]); // each chat: {id,title,messages:[],files:[],loaded?:bool}
     const [activeChatId, setActiveChatId] = useState(null);
-    const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
+    // Prefer prop userData, else load from localStorage, else guest fallback
+    const derivedUser = externalUserData || (() => {
+        try { const u = localStorage.getItem('user'); return u ? JSON.parse(u) : null; } catch { return null; }
+    })();
+    const [userData, setUserData] = useState(derivedUser || { name: 'Guest User', email: 'guest@example.com', id: 'guest', token: localStorage.getItem('token') || '' });
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+    // UI State
     const [showAccountModal, setShowAccountModal] = useState(false);
-    const [showHelp, setShowHelp] = useState(false);
-    const [showFilePreview, setShowFilePreview] = useState(null);
-    const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+    const [showPasswordModal, setShowPasswordModal] = useState(false);
+    const [showFileDashboard, setShowFileDashboard] = useState(false);
+    const [showContactModal, setShowContactModal] = useState(false);
+    const [showFilePreview, setShowFilePreview] = useState(null); // Holds file object
+    const [toast, setToast] = useState({ show: false, message: '', type: 'error', action: null });
     const [searchTerm, setSearchTerm] = useState('');
-    const [uploadedFiles, setUploadedFiles] = useState([]);
-    const [selectedFileIds, setSelectedFileIds] = useState([]);
-    const [tableData, setTableData] = useState(null);
-    const [tableSQL, setTableSQL] = useState('');
-    const [showSQL, setShowSQL] = useState(false);
-    const [tableLoading, setTableLoading] = useState(false);
-    const [tableError, setTableError] = useState('');
-    const [pendingFile, setPendingFile] = useState(null);
-    const [previewRows, setPreviewRows] = useState([]);
-    const [showTitleModal, setShowTitleModal] = useState(false);
-    const [pendingTitle, setPendingTitle] = useState('');
+    const [viewCode, setViewCode] = useState('');
+    const [confirmationProps, setConfirmationProps] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+    const [shareCodeInfo, setShareCodeInfo] = useState({ isOpen: false, code: null });
+    const [isEditingTitle, setIsEditingTitle] = useState(false);
+    const [editingTitle, setEditingTitle] = useState('');
+    const [showDashboardHint, setShowDashboardHint] = useState(false);
+    const [lastDeletedFile, setLastDeletedFile] = useState(null);
+    const [aiFilePickerOpen, setAiFilePickerOpen] = useState(false);
+    const [selectedAIFileIds, setSelectedAIFileIds] = useState([]); // file metadata ids to send to /ai/ask
 
     // --- Refs ---
-    const helpRef = useRef(null);
     const fileInputRef = useRef(null);
+    const titleInputRef = useRef(null);
 
-    // --- Persist active chat ---
-    useEffect(() => {
-        if (activeChatId && userData?.id) {
-            localStorage.setItem(`vizora_active_chat_${userData.id}`, String(activeChatId));
-        }
-    }, [activeChatId, userData?.id]);
-
-    // --- Responsive sidebar ---
+    // --- Effects ---
+    // Handle responsive sidebar
     useEffect(() => {
         const handleResize = () => {
             const mobile = window.innerWidth < 768;
@@ -56,415 +66,65 @@ export default function Chatbot({ userData, onLogout }) {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
+    // Load chats from backend on mount or when token changes
     useEffect(() => {
-        function handleClickOutside(event) {
-            if (helpRef.current && !helpRef.current.contains(event.target)) {
-                setShowHelp(false);
+        const load = async () => {
+            try {
+                const remoteChats = await chatApi.listChats();
+                const enriched = remoteChats.map(c => ({ ...c, messages: [], files: [], loaded: false }));
+                setChats(enriched);
+                if (enriched.length > 0) setActiveChatId(enriched[0].id);
+            } catch (e) {
+                console.error('Failed to load chats', e);
             }
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [helpRef]);
+        };
+        if (userData?.token) load();
+    }, [userData?.token]);
 
+    // Hydrate messages & files when switching to a chat not yet loaded
+    useEffect(() => {
+        const hydrate = async () => {
+            if (!activeChatId) return;
+            setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, loading: true } : c));
+            try {
+                const msgs = await chatApi.getMessages(activeChatId);
+                const files = await chatApi.listFiles(activeChatId);
+                setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, messages: msgs, files, loaded: true, loading: false } : c));
+            } catch (e) {
+                setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, loading: false } : c));
+            }
+        };
+        const current = chats.find(c => c.id === activeChatId);
+        if (current && !current.loaded) hydrate();
+    }, [activeChatId, chats]);
+
+    // Handle toast timeout
     useEffect(() => {
         if (toast.show) {
-            const timer = setTimeout(() => setToast({ show: false, message: '', type: 'error' }), 3000);
+            const timer = setTimeout(() => {
+                setToast(t => ({ ...t, show: false }));
+            }, 5000);
             return () => clearTimeout(timer);
         }
     }, [toast]);
 
-    // --- Fetch all chats, restore active chat, fetch messages/files ---
+    // Focus title input when editing
     useEffect(() => {
-        if (!userData?.token) {
-            setChats([]);
-            setActiveChatId(null);
-            setUploadedFiles([]);
-            return;
+        if (isEditingTitle && titleInputRef.current) {
+            titleInputRef.current.focus();
+            titleInputRef.current.select();
         }
-        const fetchAll = async () => {
-            try {
-                const res = await fetch(`${API}/chats`, {
-                    headers: { Authorization: `Bearer ${userData.token}` }
-                });
-                if (!res.ok) throw new Error('Could not load chats.');
-                const data = await res.json();
-                const chatList = Array.isArray(data) ? data : [];
-                setChats(chatList.map(chat => ({
-                    id: chat.id,
-                    title: chat.title,
-                    messages: []
-                })));
-                // Restore active chat from localStorage or pick first
-                let saved = localStorage.getItem(`vizora_active_chat_${userData.id}`);
-                let chatId = saved && chatList.some(c => String(c.id) === saved) ? Number(saved) : (chatList[0]?.id ?? null);
-                setActiveChatId(chatId);
-            } catch (err) {
-                setChats([]);
-                setActiveChatId(null);
-                setUploadedFiles([]);
-                showToast(err.message || "Failed to load chats.");
-            }
-        };
-        fetchAll();
-    }, [userData]);
+    }, [isEditingTitle]);
 
-    // --- Fetch messages and files for active chat ---
+    // Dashboard hint timeout
     useEffect(() => {
-        if (!userData?.token || !activeChatId) {
-            setUploadedFiles([]);
-            return;
+        if (showDashboardHint) {
+            const timer = setTimeout(() => setShowDashboardHint(false), 5000);
+            return () => clearTimeout(timer);
         }
-        const fetchDetails = async () => {
-            try {
-                // Messages
-                const msgRes = await fetch(`${API}/chats/${activeChatId}/messages`, {
-                    headers: { Authorization: `Bearer ${userData.token}` }
-                });
-                let messages = [];
-                if (msgRes.ok) messages = await msgRes.json();
-                // Files
-                const fileRes = await fetch(`${API}/chats/${activeChatId}/files`, {
-                    headers: { Authorization: `Bearer ${userData.token}` }
-                });
-                let files = [];
-                if (fileRes.ok) {
-                    files = await fileRes.json();
-                    setUploadedFiles(files.map(f => ({
-                        id: f.id,
-                        name: f.file_name || f.name,
-                        columns: f.columns || []
-                    })));
-                } else {
-                    setUploadedFiles([]);
-                }
-                // Update chat messages
-                setChats(prev =>
-                    prev.map(chat =>
-                        chat.id === activeChatId
-                            ? { ...chat, messages }
-                            : chat
-                    )
-                );
-            } catch (err) {
-                setUploadedFiles([]);
-            }
-        };
-        fetchDetails();
-    }, [userData, activeChatId]);
+    }, [showDashboardHint]);
 
-    // --- Show toast ---
-    const showToast = (message, type = 'error') => setToast({ show: true, message, type });
-
-    // --- Auto-create chat if needed ---
-    const ensureChat = useCallback(async () => {
-        if (activeChatId) return activeChatId;
-        try {
-            const res = await fetch(`${API}/chats`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                body: JSON.stringify({ title: 'New Conversation' })
-            });
-            const data = await res.json();
-            if (res.ok && data.chat_id) {
-                setChats(prev => [{ id: data.chat_id, title: data.title || 'New Conversation', messages: [] }, ...prev]);
-                setActiveChatId(data.chat_id);
-                return data.chat_id;
-            } else {
-                showToast(data.detail || "Failed to create chat.");
-                return null;
-            }
-        } catch (err) {
-            showToast("Failed to create chat.");
-            return null;
-        }
-    }, [activeChatId, userData?.token]);
-
-    // --- File upload (auto-create chat if needed) ---
-    const handleFileUpload = async (fileOrEvent) => {
-        let file;
-        if (fileOrEvent.target) {
-            file = fileOrEvent.target.files[0];
-        } else {
-            file = fileOrEvent;
-        }
-        if (!file) {
-            showToast("No file selected.");
-            return;
-        }
-        let chatId = activeChatId;
-        if (!chatId) chatId = await ensureChat();
-        if (!chatId) return;
-        const allowedTypes = [
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'text/csv'
-        ];
-        if (!allowedTypes.includes(file.type)) {
-            showToast('Invalid file type. Please upload .xlsx or .csv files.');
-            return;
-        }
-        const formData = new FormData();
-        formData.append('file', file);
-        try {
-            const res = await fetch(`${API}/chats/${chatId}/files`, {
-                method: 'POST',
-                body: formData,
-                headers: { Authorization: `Bearer ${userData.token}` }
-            });
-            const data = await res.json();
-            if (res.ok && data.file_id) {
-                // Refresh file list from backend
-                const fileRes = await fetch(`${API}/chats/${chatId}/files`, {
-                    headers: { Authorization: `Bearer ${userData.token}` }
-                });
-                let files = [];
-                if (fileRes.ok) {
-                    files = await fileRes.json();
-                    setUploadedFiles(files.map(f => ({
-                        id: f.id,
-                        name: f.file_name || f.name,
-                        columns: f.columns || []
-                    })));
-                    setSelectedFileIds([data.file_id]);
-                }
-                showToast(`Uploaded ${file.name}`, "success");
-            } else {
-                showToast(data.detail || "File upload failed.");
-            }
-        } catch (err) {
-            showToast("File upload failed.");
-        }
-        if (fileInputRef.current) fileInputRef.current.value = "";
-    };
-
-    // --- File select for preview ---
-    const handleFileSelect = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        // Parse CSV/XLSX for preview (use PapaParse/XLSX)
-        if (file.type === "text/csv") {
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-                if (window.Papa) {
-                    const result = window.Papa.parse(evt.target.result, { header: true, skipEmptyLines: true });
-                    setPreviewRows(result.data.slice(0, 5));
-                    setPendingFile(file);
-                }
-            };
-            reader.readAsText(file);
-        } else if (
-            file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ) {
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-                if (window.XLSX) {
-                    const wb = window.XLSX.read(evt.target.result, { type: "binary" });
-                    const sheetName = wb.SheetNames[0];
-                    const ws = wb.Sheets[sheetName];
-                    const jsonData = window.XLSX.utils.sheet_to_json(ws, { header: 1 });
-                    const headers = jsonData[0] || [];
-                    const rows = jsonData.slice(1, 6).map(row =>
-                        headers.reduce((obj, h, i) => ({ ...obj, [h]: row[i] }), {})
-                    );
-                    setPreviewRows(rows);
-                    setPendingFile(file);
-                }
-            };
-            reader.readAsBinaryString(file);
-        }
-    };
-
-    // --- Send message (auto-create chat if needed) ---
-    const handleSendMessage = async (text, file = null) => {
-        if (!text || !text.trim()) return;
-        let chatId = activeChatId;
-        if (!chatId) chatId = await ensureChat();
-        if (!chatId) return;
-
-        const userMessage = { id: `msg-${Date.now()}`, sender: 'user', text, file };
-        const botTyping = { id: `msg-${Date.now() + 1}`, sender: 'bot', typing: true };
-
-        setChats(currentChats => currentChats.map(chat =>
-            chat.id === chatId
-                ? { ...chat, messages: [...chat.messages, userMessage, botTyping] }
-                : chat
-        ));
-
-        // Only send file_ids if user selected files
-        const payload = {
-            question: text,
-            chat_id: chatId,
-            ...(selectedFileIds.length > 0 ? { file_ids: selectedFileIds } : {})
-        };
-
-        try {
-            const aiRes = await fetch(`${API}/ai/ask`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                body: JSON.stringify(payload)
-            });
-            if (!aiRes.ok) throw new Error('AI service request failed');
-            const aiData = await aiRes.json();
-
-            setChats(currentChats => currentChats.map(chat => {
-                if (chat.id === chatId) {
-                    const newMessages = chat.messages.filter(m => !m.typing);
-                    newMessages.push({
-                        id: `msg-${Date.now() + 2}`,
-                        sender: 'bot',
-                        text: aiData.answer,
-                        table: aiData.table,
-                        chart: aiData.chart,
-                        chartType: aiData.chartType,
-                        sql: aiData.sql
-                    });
-                    // Update chat title if backend provides it
-                    return { ...chat, messages: newMessages, title: aiData.title || chat.title };
-                }
-                return chat;
-            }));
-
-            // Only fetch table if SQL is present and user selected files
-            if (aiData.sql && selectedFileIds.length > 0) {
-                setTableLoading(true);
-                setTableError('');
-                try {
-                    const tableRes = await fetch(`${API}/table/query`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                        body: JSON.stringify({
-                            ...(selectedFileIds.length === 1 ? { file_id: selectedFileIds[0] } : { file_ids: selectedFileIds }),
-                            sql: aiData.sql
-                        })
-                    });
-                    const tableJson = await tableRes.json();
-                    if (tableRes.ok && tableJson.columns && tableJson.rows) {
-                        setTableData(tableJson);
-                        setTableSQL(aiData.sql);
-                        setShowSQL(false);
-                    } else {
-                        throw new Error(tableJson.detail || "Failed to fetch table data.");
-                    }
-                } catch (err) {
-                    setTableData(null);
-                    setTableSQL('');
-                    setTableError(err.message);
-                }
-                setTableLoading(false);
-            } else {
-                setTableData(null);
-                setTableSQL('');
-                setTableError('');
-            }
-        } catch (err) {
-            setChats(currentChats => currentChats.map(chat => {
-                if (chat.id === chatId) {
-                    const newMessages = chat.messages.filter(m => !m.typing);
-                    newMessages.push({ id: `msg-${Date.now() + 2}`, sender: 'bot', text: "Sorry, something went wrong." });
-                    return { ...chat, messages: newMessages };
-                }
-                return chat;
-            }));
-            setTableData(null);
-            setTableSQL('');
-            setTableError('');
-        }
-    };
-
-    const handleDeleteChat = (chatId) => {
-        const remainingChats = chats.filter(chat => chat.id !== chatId);
-        setChats(remainingChats);
-        if (activeChatId === chatId) {
-            setActiveChatId(remainingChats.length > 0 ? remainingChats[0].id : null);
-        }
-    };
-
-    const handleDeleteHistory = () => {
-        setChats([]);
-        setActiveChatId(null);
-        setShowAccountModal(false);
-        showToast("All chats have been deleted.", "success");
-    };
-
-    const handleShareChat = () => {
-        navigator.clipboard.writeText(window.location.href)
-            .then(() => showToast("Chat link copied to clipboard!", "success"))
-            .catch(() => showToast("Failed to copy link."));
-    };
-
-    // --- Filtered chat list for sidebar search
-    const filteredChats = useMemo(
-        () =>
-            chats.filter(chat =>
-                (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())
-            ),
-        [chats, searchTerm]
-    );
-
-    // --- Find the active chat object
-    const activeChat = useMemo(
-        () => chats.find(chat => chat.id === activeChatId),
-        [chats, activeChatId]
-    );
-
-    // --- Chat title editing ---
-    const [editingTitle, setEditingTitle] = useState(false);
-    const [titleInput, setTitleInput] = useState('');
-    useEffect(() => {
-        if (editingTitle && activeChat) setTitleInput(activeChat.title || '');
-    }, [editingTitle, activeChat]);
-    const saveTitle = async () => {
-        if (!activeChat || !titleInput.trim() || titleInput === activeChat.title) {
-            setEditingTitle(false);
-            return;
-        }
-        try {
-            const res = await fetch(`${API}/chats/${activeChat.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                body: JSON.stringify({ title: titleInput })
-            });
-            if (res.ok) {
-                setChats(prev => prev.map(c => c.id === activeChat.id ? { ...c, title: titleInput } : c));
-            } else {
-                showToast('Failed to update title.');
-            }
-        } catch {
-            showToast('Failed to update title.');
-        }
-        setEditingTitle(false);
-    };
-
-    // --- Create a new chat and set as active
-    const handleNewChat = useCallback(async () => {
-        setShowTitleModal(true);
-    }, []);
-
-    const confirmNewChat = async () => {
-        if (!pendingTitle.trim()) {
-            showToast("Chat title cannot be empty.");
-            return;
-        }
-        try {
-            const res = await fetch(`${API}/chats`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userData.token}` },
-                body: JSON.stringify({ title: pendingTitle })
-            });
-            const data = await res.json();
-            if (res.ok && data.chat_id) {
-                setChats(prev => [{ id: data.chat_id, title: data.title || 'New Conversation', messages: [] }, ...prev]);
-                setActiveChatId(data.chat_id);
-                setPendingTitle('');
-                setShowTitleModal(false);
-            } else {
-                showToast(data.detail || "Failed to create chat.");
-            }
-        } catch (err) {
-            showToast("Failed to create chat.");
-        }
-    };
-
-    // --- Style/script injection (unchanged) ---
+    // Load external scripts
     useEffect(() => {
         const styleElement = document.createElement('style');
         styleElement.innerHTML = `
@@ -472,36 +132,334 @@ export default function Chatbot({ userData, onLogout }) {
             .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
             .custom-scrollbar::-webkit-scrollbar-thumb { background: #555; border-radius: 10px; }
             .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #777; }
-            @keyframes blob {
-              0% { transform: translate(0px, 0px) scale(1); }
-              33% { transform: translate(30px, -50px) scale(1.1); }
-              66% { transform: translate(-20px, 20px) scale(0.9); }
-              100% { transform: translate(0px, 0px) scale(1); }
-            }
+            @keyframes blob { 0% { transform: translate(0px, 0px) scale(1); } 33% { transform: translate(30px, -50px) scale(1.1); } 66% { transform: translate(-20px, 20px) scale(0.9); } 100% { transform: translate(0px, 0px) scale(1); } }
             .animate-blob { animation: blob 10s infinite; }
             .animation-delay-4000 { animation-delay: -4s; }
+            @keyframes rotate-gear { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }
+            .animate-gear-spin { animation: rotate-gear 0.4s ease-in-out; }
+            @keyframes trash-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-3px) rotate(-3deg); } 75% { transform: translateX(3px) rotate(3deg); } }
+            .animate-trash-shake { animation: trash-shake 0.3s ease-in-out; }
         `;
         document.head.appendChild(styleElement);
 
         const loadScript = (src, id) => {
             if (document.getElementById(id)) return;
             const script = document.createElement('script');
-            script.src = src;
-            script.id = id;
-            script.async = true;
+            script.src = src; script.id = id; script.async = true;
             document.head.appendChild(script);
         };
-
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js', 'papaparse-script');
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', 'xlsx-script');
 
-        return () => {
-            document.head.removeChild(styleElement);
-        };
+        return () => { document.head.removeChild(styleElement); };
     }, []);
 
-    // --- Render ---
-    // The entire JSX return block is preserved, but will now work correctly with valid data.
+    // --- Computed State ---
+    const activeChat = useMemo(() => chats.find(chat => chat.id === activeChatId), [chats, activeChatId]);
+    const filteredChats = useMemo(() =>
+        chats.filter(chat => chat.title.toLowerCase().includes(searchTerm.toLowerCase()))
+    , [chats, searchTerm]);
+
+    // --- Core Functions ---
+    const showToast = (message, type = 'success', action = null) => {
+        setToast({ show: true, message, type, action });
+    };
+
+    const appendMessages = (chatId, newMsgs) => {
+        setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, ...newMsgs] } : c));
+    };
+
+    const handleUploadFile = async (file, chatId, silent=false) => {
+        try {
+            const meta = await chatApi.uploadFile(chatId, file);
+            setChats(prev => prev.map(c => c.id === chatId ? { ...c, files: [...(c.files||[]), meta] } : c));
+            if (!silent) showToast(`Uploaded ${file.name}`, 'success');
+            return meta;
+        } catch (e) {
+            showToast('File upload failed','error');
+        }
+    };
+
+    const handleNewChat = async (initialFileMessage = null) => {
+        try {
+            const backendChat = await chatApi.createChat('New Conversation');
+            const newChatId = backendChat.id;
+            const newChat = { ...backendChat, messages: [], files: [], loaded: true };
+            // If initial file message provided, upload file
+            if (initialFileMessage && initialFileMessage.file) {
+                await handleUploadFile(initialFileMessage.file.raw || initialFileMessage.file, newChatId, true);
+                newChat.messages.push({ id:`init-${Date.now()}`, sender:'user', file: initialFileMessage.file });
+                setShowDashboardHint(true);
+            }
+            setChats(prevChats => [newChat, ...prevChats]);
+            setActiveChatId(newChatId);
+            if(isMobile) setIsSidebarOpen(false);
+        } catch (e) {
+            console.error('Create chat failed', e);
+            showToast('Failed to create chat','error');
+        }
+    };
+
+    const handleSendMessage = async (text, file = null, { autoAI = true } = {}) => {
+        if ((!text || !text.trim()) && !file) return;
+        let chatId = activeChatId;
+        if (!chatId) {
+            await handleNewChat();
+            chatId = activeChatId;
+        }
+        try {
+            let fileMsg = null;
+            if (file) {
+                setShowDashboardHint(true);
+                const meta = await handleUploadFile(file, chatId);
+                if (meta) {
+                    fileMsg = { id:`file-${meta.id}`, sender:'user', file: { name: meta.file_name, size: `${Math.round(meta.file_size/1024)} KB`, type: meta.file_type, meta } };
+                    appendMessages(chatId, [fileMsg]);
+                }
+            }
+            if (text && text.trim()) {
+                const msg = await chatApi.addMessage(chatId, text.trim(), 'user');
+                appendMessages(chatId, [msg]);
+                if (autoAI) {
+                    triggerAIResponse(chatId, text.trim());
+                }
+            }
+        } catch(e){
+            console.error('Send failed', e);
+            showToast('Failed to send','error');
+        }
+    };
+
+    const triggerAIResponse = async (chatId, question) => {
+        // Show typing placeholder
+        const typingId = `typing-${Date.now()}`;
+        appendMessages(chatId, [{ id: typingId, sender: 'bot', typing: true }]);
+        try {
+            // Collect file_ids for this chat (metadata already stored after upload)
+            const chat = chats.find(c => c.id === chatId);
+            let fileIds = (chat?.files || []).map(f => f.id);
+            if (selectedAIFileIds.length > 0) {
+                // Only use user-selected subset (ensure they belong to this chat)
+                fileIds = fileIds.filter(id => selectedAIFileIds.includes(id));
+            }
+            const payload = { question, chat_id: chatId };
+            if (fileIds.length > 0) payload.file_ids = fileIds;
+            const res = await aiApi.ask(payload); // expects { answer: string, sql?: string }
+            // Replace typing with answer first
+            let botMessageId = `bot-${Date.now()}`;
+            setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: c.messages.map(m => m.id === typingId ? { id: botMessageId, sender:'bot', text: res.answer } : m) } : c));
+            // If SQL present, run table query automatically
+            if (res.sql && res.sql.trim()) {
+                const sql = res.sql.trim();
+                try {
+                    const tableRes = await tableQueryApi.run({ sql, file_ids: fileIds });
+                    const tableMsg = {
+                        id: `table-${Date.now()}`,
+                        sender: 'bot',
+                        table: {
+                            sql,
+                            columns: tableRes.columns || [],
+                            rows: tableRes.rows || [],
+                            fileIds,
+                            view: 'table', // or 'sql'
+                            editingSql: sql,
+                            running: false,
+                            error: null
+                        }
+                    };
+                    appendMessages(chatId, [tableMsg]);
+                } catch (err) {
+                    const errMsg = { id:`tableerr-${Date.now()}`, sender:'bot', text: 'Failed to run generated SQL.' };
+                    appendMessages(chatId, [errMsg]);
+                }
+            }
+        } catch(e){
+            setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: c.messages.map(m => m.id === typingId ? { id: `bot-${Date.now()}`, sender:'bot', text: 'AI response failed.' } : m) } : c));
+        }
+    };
+
+    const requestDeleteChat = (chatId) => {
+        if (!chatId) return;
+        setConfirmationProps({
+            isOpen: true,
+            title: 'Delete Chat?',
+            message: 'Are you sure you want to permanently delete this chat?',
+            onConfirm: () => handleDeleteChat(chatId)
+        });
+    };
+
+    const handleDeleteChat = (chatId) => {
+        const remainingChats = chats.filter(chat => chat.id !== chatId);
+        setChats(remainingChats);
+        if (activeChatId === chatId) {
+            const newActiveId = remainingChats.length > 0 ? remainingChats[0].id : null;
+            setActiveChatId(newActiveId);
+            if (remainingChats.length === 0) {
+                handleNewChat();
+            }
+        }
+        showToast("Chat deleted.", "success");
+    };
+
+    const requestDeleteHistory = () => {
+        setConfirmationProps({
+            isOpen: true,
+            title: 'Delete All Chats?',
+            message: 'Are you sure you want to permanently delete your entire chat history? This action cannot be undone.',
+            onConfirm: handleDeleteHistory
+        });
+    };
+
+    const handleDeleteHistory = () => {
+        setChats([]);
+        setActiveChatId(null);
+        handleNewChat();
+        showToast("All chats have been deleted.", "success");
+    };
+
+    const handleLogout = () => {
+        setUserData({ name: 'Guest User', email: 'guest@example.com' }); // Reset user data
+        setChats([]);
+        setActiveChatId(null);
+        handleNewChat();
+        showToast("You have been logged out.", "success");
+    };
+
+    const requestLogout = () => {
+        setConfirmationProps({
+            isOpen: true,
+            title: 'Logout?',
+            message: "We're going to miss you. Come back soon!",
+            onConfirm: handleLogout,
+            confirmText: 'Logout',
+            icon: LogOut,
+            iconColor: 'text-red-400',
+            iconBgColor: 'bg-red-500/20',
+            isLogout: true
+        });
+    };
+    
+    const handleFileUpload = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'];
+        if (!allowedTypes.includes(file.type)) {
+            return showToast('Invalid file type. Please upload .xlsx or .csv files.', 'error');
+        }
+
+        const fileData = {
+            name: file.name,
+            size: (file.size / 1024).toFixed(2) + ' KB',
+            type: file.type === 'text/csv' ? 'CSV' : 'XLSX',
+            raw: file
+        };
+
+        const initialMessage = {
+            id: `msg-${Date.now()}`,
+            sender: 'user',
+            file: fileData,
+        };
+
+        handleNewChat(initialMessage);
+        
+        // Reset file input value to allow re-uploading the same file
+        if(fileInputRef.current) {
+            fileInputRef.current.value = "";
+        }
+    };
+    
+    const handleDeleteFileMessage = (chatId, messageId) => {
+        const chatToUpdate = chats.find(c => c.id === chatId);
+        if (!chatToUpdate) return;
+    
+        const originalChatState = JSON.parse(JSON.stringify(chatToUpdate)); // Deep copy for undo
+        
+        const newMessages = chatToUpdate.messages.filter(m => m.id !== messageId);
+        
+        setChats(chats.map(c => c.id === chatId ? { ...c, messages: newMessages } : c));
+        setLastDeletedFile(originalChatState);
+    
+        showToast("File removed.", "success", {
+            label: "Undo",
+            onClick: handleUndoDeleteFile
+        });
+    };
+
+    const handleUndoDeleteFile = () => {
+        if (lastDeletedFile) {
+            setChats(chats.map(chat => chat.id === lastDeletedFile.id ? lastDeletedFile : chat));
+            setLastDeletedFile(null);
+            showToast("File restored", "success");
+        }
+    };
+    
+    const handleStartRename = () => {
+        if (!activeChat) return;
+        setEditingTitle(activeChat.title);
+        setIsEditingTitle(true);
+    };
+
+    const handleRenameChat = () => {
+        if (!activeChat || !editingTitle.trim()) {
+            setIsEditingTitle(false);
+            return;
+        }
+        setChats(chats.map(chat =>
+            chat.id === activeChatId ? { ...chat, title: editingTitle.trim() } : chat
+        ));
+        setIsEditingTitle(false);
+    };
+
+    const handleShareCode = async () => {
+        if (!activeChatId) return showToast('Select a chat to share.', 'error');
+        try {
+            const res = await shareChatApi(activeChatId);
+            const code = res.share_code || res.code;
+            setShareCodeInfo({ isOpen: true, code });
+        } catch(e){
+            showToast('Share failed','error');
+        }
+    };
+    
+    const handleRequestDashboard = async (fileMsgId) => {
+        const chat = chats.find(c => c.id === activeChatId);
+        if (!chat) return;
+        const fileEntry = chat.messages.find(m => m.id === fileMsgId && m.file);
+        if (!fileEntry) return showToast('File not found','error');
+        try {
+            // Use file metadata columns to build a minimal dashboard_json placeholder
+            const dashboardPayload = {
+                dashboard_name: fileEntry.file.name.replace(/\.(csv|xlsx)$/i, '') + ' Dashboard',
+                dashboard_json: []
+            };
+            const created = await dashboardApi.createDashboard(dashboardPayload.dashboard_json, dashboardPayload.dashboard_name);
+            showToast(`Dashboard created (ID ${created.id})`, 'success');
+            // Redirect to dashboard view with id param (assumes route handles ?id=)
+            setTimeout(() => { window.location.href = `/dashboard?id=${created.id}`; }, 600);
+        } catch(e){
+            showToast('Dashboard creation failed','error');
+        } finally {
+            setShowFileDashboard(false);
+        }
+    };
+
+    const handleViewSharedChat = async () => {
+        if (!viewCode.trim()) return showToast('Please enter a code.', 'error');
+        try {
+            const chat = await getSharedChatApi(viewCode.trim());
+            let messages = [];
+            try { messages = await chatApi.getMessages(chat.id); } catch {}
+            const merged = { ...chat, messages, files: [], loaded:true };
+            setChats(prev => [merged, ...prev.filter(c => c.id !== chat.id)]);
+            setActiveChatId(chat.id);
+            setViewCode('');
+            showToast('Shared chat loaded','success');
+        } catch(e){
+            showToast('Invalid share code','error');
+        }
+    };
+
     return (
         <div className="font-sans antialiased text-gray-200 bg-[#212121] h-screen w-screen overflow-hidden flex relative">
             <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0">
@@ -511,295 +469,291 @@ export default function Chatbot({ userData, onLogout }) {
 
             <AnimatePresence>
                 {isSidebarOpen && (
-                    <motion.aside
-                        key="sidebar"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: 0 }}
-                        exit={{ x: '-100%' }}
-                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-                        className="bg-[#323232]/80 backdrop-blur-md h-full z-20 flex flex-col"
-                        style={{ width: isMobile ? '85%' : '260px' }}
-                    >
+                    <motion.aside key="sidebar" initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                        className="bg-[#323232]/80 backdrop-blur-md h-full z-20 flex flex-col" style={{ width: isMobile ? '85%' : '260px' }}>
                         <Sidebar
-                            chats={filteredChats}
-                            activeChatId={activeChatId}
-                            setActiveChatId={setActiveChatId}
+                            chats={filteredChats} activeChatId={activeChatId} setActiveChatId={setActiveChatId}
                             onNewChat={handleNewChat}
-                            onShowAccount={() => setShowAccountModal(true)}
-                            onShareChat={handleShareChat}
-                            onDeleteChat={() => handleDeleteChat(activeChatId)}
+                            onDeleteChat={() => requestDeleteChat(activeChatId)}
                             onToggleSidebar={() => setIsSidebarOpen(false)}
-                            searchTerm={searchTerm}
-                            setSearchTerm={setSearchTerm}
-                            userData={userData}
-                            navigate={navigate}
+                            searchTerm={searchTerm} setSearchTerm={setSearchTerm} viewCode={viewCode} setViewCode={setViewCode} onViewSharedChat={handleViewSharedChat}
+                            onShowAccount={() => setShowAccountModal(true)}
+                            onShowContact={() => setShowContactModal(true)}
+                            onShareCode={handleShareCode}
+                            onClearHistory={requestDeleteHistory}
+                            onLogout={requestLogout}
                         />
                     </motion.aside>
                 )}
             </AnimatePresence>
 
             <main className="flex-1 flex flex-col h-full z-10 relative">
-                                <header className="flex items-center justify-between p-4 border-b border-gray-700/50 bg-[#212121]/50 backdrop-blur-sm">
-                                        <div className="flex items-center gap-3 w-full">
-                                                {!isSidebarOpen && (
-                                                        <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
-                                                                <Menu className="w-6 h-6 text-gray-300" />
-                                                        </button>
-                                                )}
-                                                <h1 className="text-xl font-semibold text-white flex items-center gap-2">
-                                                    {editingTitle ? (
-                                                        <input
-                                                            className="bg-transparent border-b border-[#14FFEC] text-white px-2 outline-none"
-                                                            value={titleInput}
-                                                            onChange={e => setTitleInput(e.target.value)}
-                                                            onBlur={saveTitle}
-                                                            onKeyDown={e => { if (e.key === 'Enter') saveTitle(); }}
-                                                            autoFocus
-                                                            style={{ minWidth: 80 }}
-                                                        />
-                                                    ) : (
-                                                        <>
-                                                            {activeChat?.title || 'Vizora Chat'}
-                                                            {activeChat && (
-                                                                <button onClick={() => setEditingTitle(true)} className="ml-1 text-[#14FFEC] hover:text-white" title="Rename chat">
-                                                                    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M15.232 5.232l3.536 3.536M9 11l6.586-6.586a2 2 0 112.828 2.828L11.828 13.828a2 2 0 01-2.828 0L9 13V11z"></path></svg>
-                                                                </button>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                </h1>
-                                                {/* Navigation Bar */}
-                                                <nav className="ml-6 flex items-center gap-2">
-                                                    <button
-                                                        onClick={() => navigate('/dashboard')}
-                                                        className="px-3 py-1 rounded bg-[#0D7377] text-white hover:bg-[#14FFEC] hover:text-black transition-colors"
-                                                        title="Go to Dashboard"
-                                                    >
-                                                        Dashboard
-                                                    </button>
-                                                </nav>
-                                        </div>
-                                        <div className="relative" ref={helpRef}>
-                                                <button onClick={() => setShowHelp(prev => !prev)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
-                                                        <HelpCircle className="w-6 h-6 text-gray-300" />
-                                                </button>
-                                                <AnimatePresence>
-                                                        {showHelp && <HelpDropdown onAction={(action) => {
-                                                                if (action === 'newChat') handleNewChat();
-                                                                if (action === 'account') setShowAccountModal(true);
-                                                                if (action === 'clear') handleDeleteHistory();
-                                                                if (action === 'upload') fileInputRef.current?.click();
-                                                                setShowHelp(false);
-                                                        }} />}
-                                                </AnimatePresence>
-                                        </div>
-                                </header>
-
-                <div className="p-4 flex gap-2 items-center bg-transparent">
-                    <label className="text-sm text-gray-400">Select file(s):</label>
-                    <select
-                        multiple
-                        value={selectedFileIds}
-                        onChange={e => setSelectedFileIds([...e.target.selectedOptions].map(opt => Number(opt.value)))}
-                        className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"
-                        style={{ minWidth: 120, maxWidth: 300 }}
-                    >
-                        {uploadedFiles.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                    </select>
-                </div>
-
-                {selectedFileIds.length > 0 && (
-                  <div className="px-4 pb-2">
-                    <div className="text-xs text-gray-400 mb-1">Available columns:</div>
-                    <div className="flex flex-wrap gap-2">
-                      {uploadedFiles
-                        .filter(f => selectedFileIds.includes(f.id))
-                        .flatMap(f => (f.columns || []).map(col => (
-                          <span key={f.id + '-' + col.name} className="bg-[#0D7377] text-white px-2 py-1 rounded text-xs">{col.name}</span>
-                        )))
-                      }
-                    </div>
-                  </div>
-                )}
-
-                <ChatPanel messages={activeChat?.messages || []} onPreviewFile={setShowFilePreview} />
-
-                {tableLoading && (
-                    <div className="my-4 mx-4 text-[#14FFEC] font-semibold">Fetching table...</div>
-                )}
-                {tableError && (
-                    <div className="my-4 mx-4 text-red-400 font-semibold">{tableError}</div>
-                )}
-                {tableData && !tableLoading && !tableError && (
-                    <div className="my-4 mx-4">
-                        <button onClick={() => setShowSQL(v => !v)} className="mb-2 px-3 py-1 rounded bg-[#0D7377] text-white">
-                            {showSQL ? "Hide SQL" : "Show SQL"}
-                        </button>
-                        <button
-                            onClick={() => {
-                                const csv = [
-                                    tableData.columns.join(","),
-                                    ...tableData.rows.map(row => tableData.columns.map(col => `"${(row[col] ?? '').toString().replace(/"/g, '""')}"`).join(","))
-                                ].join("\n");
-                                const blob = new Blob([csv], { type: "text/csv" });
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement("a");
-                                a.href = url;
-                                a.download = "vizora-table.csv";
-                                a.click();
-                                URL.revokeObjectURL(url);
-                            }}
-                            className="mb-2 ml-2 px-3 py-1 rounded bg-[#14FFEC] text-black font-semibold"
-                        >
-                            Export CSV
-                        </button>
-                        {showSQL && (
-                            <pre className="bg-gray-900 text-green-300 p-2 rounded mb-2 overflow-x-auto">{tableSQL}</pre>
+                <header className="flex items-center justify-between p-4 border-b border-gray-700/50 bg-[#212121]/50 backdrop-blur-sm">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                        {!isSidebarOpen && ( <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"> <Menu className="w-6 h-6 text-gray-300" /> </button> )}
+                        {isEditingTitle ? (
+                            <input
+                                ref={titleInputRef}
+                                type="text"
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                onBlur={handleRenameChat}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="text-xl font-semibold text-white bg-gray-700/80 rounded-md px-2 py-0.5 w-full focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"
+                            />
+                        ) : (
+                            <>
+                                <h1 className="text-xl font-semibold text-white truncate">{activeChat?.title || 'Vizora Chat'}</h1>
+                                {activeChat && (
+                                    <button onClick={handleStartRename} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
+                                        <Pencil className="w-4 h-4 text-gray-400" />
+                                    </button>
+                                )}
+                            </>
                         )}
-                        <div className="overflow-x-auto rounded">
-                            <table className="w-full text-sm bg-gray-800 rounded">
-                                <thead>
-                                    <tr>
-                                        {tableData.columns.map(col => <th key={col} className="px-4 py-2">{col}</th>)}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {tableData.rows.map((row, i) => (
-                                        <tr key={i}>
-                                            {tableData.columns.map(col => <td key={col}>{row[col]}</td>)}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
                     </div>
-                )}
+                                        <div className="flex items-center gap-2 relative">
+                         <AnimatePresence>
+                            {showDashboardHint && (
+                                <motion.div
+                                    initial={{ opacity: 0, x: 10, scale: 0.8 }}
+                                    animate={{ opacity: 1, x: 0, scale: 1 }}
+                                    exit={{ opacity: 0, x: 10, scale: 0.8 }}
+                                    transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                                    className="absolute right-full mr-2 top-1/2 -translate-y-1/2 w-max max-w-xs bg-[#14FFEC] text-black text-xs font-semibold px-3 py-1.5 rounded-lg shadow-lg"
+                                >
+                                    You can select a file to create a dashboard!
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                        <button onClick={() => setShowFileDashboard(true)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC] disabled:opacity-50 disabled:cursor-not-allowed" disabled={!activeChat || activeChat.messages.filter(m => m.file).length === 0}>
+                           <LayoutDashboard className="w-6 h-6 text-gray-300" />
+                        </button>
+                                                {activeChat && activeChat.files && activeChat.files.length > 0 && (
+                                                    <button onClick={() => setAiFilePickerOpen(o=>!o)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
+                                                        <HardDrive className="w-6 h-6 text-gray-300" />
+                                                    </button>
+                                                )}
+                                                <AnimatePresence>
+                                                    {aiFilePickerOpen && (
+                                                        <motion.div initial={{opacity:0, y:-10}} animate={{opacity:1, y:0}} exit={{opacity:0, y:-10}} className="absolute top-full right-0 mt-2 w-64 bg-[#323232] border border-gray-700 rounded-lg shadow-xl p-3 z-30">
+                                                            <h4 className="text-xs uppercase tracking-wider text-gray-400 mb-2">AI File Context</h4>
+                                                            <div className="max-h-52 overflow-y-auto custom-scrollbar space-y-2">
+                                                                {activeChat.files.map(f => {
+                                                                    const checked = selectedAIFileIds.includes(f.id);
+                                                                    return (
+                                                                        <label key={f.id} className={`flex items-start gap-2 text-xs p-2 rounded-md cursor-pointer border ${checked? 'border-[#14FFEC] bg-gray-700/40':'border-transparent hover:border-gray-600'}`}> 
+                                                                            <input type="checkbox" className="mt-0.5" checked={checked} onChange={() => {
+                                                                                setSelectedAIFileIds(prev => checked ? prev.filter(id=>id!==f.id) : [...prev, f.id]);
+                                                                            }} />
+                                                                            <span className="flex-1 text-gray-300 truncate">{f.file_name}</span>
+                                                                        </label>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <div className="mt-3 flex justify-between gap-2">
+                                                                <button onClick={() => setSelectedAIFileIds([])} className="text-[10px] px-2 py-1 rounded bg-gray-700/60 hover:bg-gray-600">Clear</button>
+                                                                <button onClick={() => setAiFilePickerOpen(false)} className="text-[10px] px-2 py-1 rounded bg-[#14FFEC] text-black hover:bg-white">Done</button>
+                                                            </div>
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                    </div>
+                </header>
 
-                <ChatInput
-                    onSendMessage={handleSendMessage}
-                    onUploadClick={() => fileInputRef.current?.click()}
-                    disableSend={false}
-                />
+                <ChatPanel messages={activeChat?.messages || []} onPreviewFile={(file) => setShowFilePreview(file)} onDeleteFile={handleDeleteFileMessage} activeChatId={activeChatId} userData={userData} />
+                <ChatInput onSendMessage={handleSendMessage} onUploadClick={() => fileInputRef.current?.click()} />
             </main>
 
-            <input type="file" ref={fileInputRef} onChange={e => { handleFileSelect(e); }} accept=".xlsx,.csv" className="hidden" />
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx,.csv" className="hidden" />
 
             <AnimatePresence>
-                {showAccountModal && <AccountModal key="accountModal" userData={userData} onClose={() => setShowAccountModal(false)} onDeleteHistory={handleDeleteHistory} onShowPasswordChange={() => {
-                    setShowAccountModal(false);
-                    navigate('/change-password');
-                }} onLogout={onLogout} />}
+                {showAccountModal && <AccountModal key="accountModal" userData={userData} onClose={() => setShowAccountModal(false)} onDeleteHistory={requestDeleteHistory} onShowPasswordChange={() => { setShowAccountModal(false); setShowPasswordModal(true); }} />}
+                {showPasswordModal && <PasswordChangeModal key="passwordModal" onClose={() => setShowPasswordModal(false)} showToast={showToast} />}
+                {showFileDashboard && <FileDashboardModal key="fileDashboardModal" chat={activeChat} onClose={() => setShowFileDashboard(false)} onConfirm={handleRequestDashboard} />}
+                {showContactModal && <ContactModal key="contactModal" onClose={() => setShowContactModal(false)} showToast={showToast} />}
                 {showFilePreview && <FilePreviewModal key="filePreviewModal" file={showFilePreview} onClose={() => setShowFilePreview(null)} />}
-                {toast.show && <Toast key="toast" message={toast.message} type={toast.type} onClose={() => setToast({ show: false, message: '', type: 'error' })} />}
+                {toast.show && <Toast key="toast" {...toast} onClose={() => setToast({ ...toast, show: false })} />}
+                {confirmationProps.isOpen && <ConfirmationModal {...confirmationProps} onClose={() => setConfirmationProps({ ...confirmationProps, isOpen: false })} />}
+                {shareCodeInfo.isOpen && <ShareCodeModal isOpen={shareCodeInfo.isOpen} code={shareCodeInfo.code} onClose={() => setShareCodeInfo({ isOpen: false, code: null })} showToast={showToast} />}
             </AnimatePresence>
-
-            {pendingFile && (
-              <FileUploadPreviewModal
-                file={pendingFile}
-                previewRows={previewRows}
-                onCancel={() => setPendingFile(null)}
-                onConfirm={async () => {
-                  await handleFileUpload(pendingFile);
-                  setPendingFile(null);
-                  setPreviewRows([]);
-                }}
-              />
-            )}
-
-            {showTitleModal && (
-              <TitleModal
-                onClose={() => setShowTitleModal(false)}
-                onConfirm={confirmNewChat}
-                value={pendingTitle}
-                onChange={setPendingTitle}
-              />
-            )}
         </div>
     );
 }
 
-// --- Child Components (All preserved and unchanged) ---
-const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onShowAccount, onShareChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, userData, navigate }) => (
+// --- Child Components ---
+// (The rest of the child components remain unchanged as they did not contain syntax errors)
+
+const SettingsItem = ({ icon: Icon, text, onClick, danger = false }) => {
+    const [isAnimating, setIsAnimating] = useState(false);
+    const [CurrentIcon, setCurrentIcon] = useState(() => Icon);
+
+    const handleClick = () => {
+        setIsAnimating(true);
+        if (text === 'Contact Support') {
+            setCurrentIcon(() => MailOpen);
+            setTimeout(() => {
+                setCurrentIcon(() => LifeBuoy);
+            }, 500);
+        }
+        onClick();
+    };
+
+    const iconAnimation = useMemo(() => {
+        switch (text) {
+            case 'Manage Account':
+                return { whileHover: { scale: 1.1, rotate: 5 }, whileTap: { scale: 0.9 } };
+            case 'Contact Support':
+                return {
+                    initial: { opacity: 0, scale: 0.5 },
+                    animate: { opacity: 1, scale: 1 },
+                    transition: { duration: 0.3 }
+                };
+            case 'Logout':
+                 return { whileHover: { scale: 1.1 }, whileTap: { scale: 0.9, x: 2 } };
+            default:
+                return { whileTap: { scale: 0.9 } };
+        }
+    }, [text]);
+
+    const animationClass = useMemo(() => {
+        if (!isAnimating) return '';
+        if (text === 'Clear History') return 'animate-trash-shake';
+        return '';
+    }, [isAnimating, text]);
+
+    const IconComponent = text === 'Contact Support' ? CurrentIcon : Icon;
+
+    return (
+        <li>
+            <button
+                onClick={handleClick}
+                className={`w-full flex items-center gap-3 p-2 rounded-md transition-colors text-left text-sm ${danger ? 'text-red-400 hover:bg-red-500/20' : 'text-gray-300 hover:bg-gray-700/60'}`}
+            >
+                <motion.div
+                    {...iconAnimation}
+                    onAnimationComplete={() => setIsAnimating(false)}
+                    className={animationClass}
+                >
+                    <IconComponent className="w-5 h-5" />
+                </motion.div>
+                <span>{text}</span>
+            </button>
+        </li>
+    );
+};
+
+const SettingsDropdown = ({ onAction }) => (
+    <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }} transition={{ duration: 0.15 }}
+        className="absolute bottom-full left-0 mb-2 w-full bg-[#323232] border border-gray-700 rounded-lg shadow-xl z-50 p-2" >
+        <ul>
+            <SettingsItem icon={User} text="Manage Account" onClick={() => onAction('account')} />
+            <SettingsItem icon={Clipboard} text="Share Code" onClick={() => onAction('share')} />
+            <SettingsItem icon={LifeBuoy} text="Contact Support" onClick={() => onAction('contact')} />
+            <SettingsItem icon={Trash2} text="Clear History" onClick={() => onAction('clear')} danger={true} />
+            <SettingsItem icon={LogOut} text="Logout" onClick={() => onAction('logout')} danger={true} />
+        </ul>
+        <div className="text-xs text-gray-500 text-center pt-2 mt-2 border-t border-gray-700/50"> Vizora can make mistakes. Please double-check important information. </div>
+    </motion.div>
+);
+
+const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, viewCode, setViewCode, onViewSharedChat, onShowAccount, onShowContact, onShareCode, onClearHistory, onLogout }) => {
+    const [showSettings, setShowSettings] = useState(false);
+    const [animatingButton, setAnimatingButton] = useState(null);
+    const settingsRef = useRef(null);
+
+    useEffect(() => {
+        function handleClickOutside(event) {
+            if (settingsRef.current && !settingsRef.current.contains(event.target)) {
+                setShowSettings(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, [settingsRef]);
+
+    return (
     <div className="flex flex-col h-full p-3">
         <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-                <img src={logoGif} alt="Vizora Logo" className="w-8 h-8" />
-                <div>
-                    <h1 className="text-2xl font-bold text-white">Vizora</h1>
-                    <div className="text-xs text-gray-400">{userData?.name}</div>
-                </div>
-            </div>
-            <button onClick={onToggleSidebar} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
-                <ChevronsLeft className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2"> <div className="w-8 h-8 bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] rounded-lg"></div> <h1 className="text-2xl font-bold text-white">Vizora</h1> </div>
+             <button onClick={onToggleSidebar} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"> <ChevronsLeft className="w-5 h-5" /> </button>
         </div>
 
-        <button onClick={onNewChat} className="group flex items-center justify-center gap-2 w-full bg-[#0D7377] text-white py-2.5 px-4 rounded-lg text-sm font-semibold hover:bg-[#14FFEC] hover:text-black transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#323232] focus:ring-[#14FFEC] mb-4">
-            <Plus className="w-5 h-5" />
-            New Chat
-        </button>
+        <button onClick={onNewChat} className="group flex items-center justify-center gap-2 w-full bg-[#0D7377] text-white py-2.5 px-4 rounded-lg text-sm font-semibold hover:bg-[#14FFEC] hover:text-black transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#323232] focus:ring-[#14FFEC] mb-4"> <Plus className="w-5 h-5" /> New Chat </button>
 
-        <div className="relative mb-4">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-                type="text"
-                placeholder="Search chats..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"
-            />
+        <div className="space-y-2 mb-4">
+            <div className="flex items-center gap-2">
+                <input type="text" placeholder="Enter code..." value={viewCode} onChange={(e) => setViewCode(e.target.value)} className="flex-1 w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]" />
+                <button onClick={onViewSharedChat} className="p-2 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors"><Eye className="w-5 h-5 text-[#14FFEC]" /></button>
+            </div>
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input type="text" placeholder="Search chats..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]" />
+            </div>
         </div>
 
         <nav className="flex-1 overflow-y-auto pr-1 -mr-1 custom-scrollbar">
             <ul className="space-y-1">
                 <AnimatePresence>
-                    {chats.map(chat => (
-                        <motion.li
-                            key={chat.id}
-                            layout
-                            initial={{ opacity: 0, y: -10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            transition={{ duration: 0.2 }}
-                        >
-                            <button
-                                type="button"
-                                onClick={() => setActiveChatId(chat.id)}
-                                className={`flex items-center justify-between w-full text-left p-2.5 rounded-lg text-sm font-medium transition-colors group ${
-                                    activeChatId === chat.id ? 'bg-[#14FFEC] text-black shadow-lg' : 'hover:bg-gray-700/60 text-gray-300'
-                                }`}
-                            >
-                                <span className="truncate">{chat.title}</span>
-                                {activeChatId === chat.id && <ChevronRight className="w-4 h-4 flex-shrink-0" />}
+                    {chats.map(chat => {
+                        return (
+                        <motion.li key={chat.id} layout initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.2 }} >
+                            <button type="button" onClick={() => setActiveChatId(chat.id)} className={`w-full text-left flex items-center justify-between p-2.5 rounded-lg text-sm font-medium transition-colors group ${ activeChatId === chat.id ? 'bg-[#14FFEC] text-black shadow-lg' : 'hover:bg-gray-700/60 text-gray-300' }`} >
+                                <span className="truncate flex-1">{chat.title}</span>
+                                {activeChatId === chat.id && <ChevronRight className="w-4 h-4 flex-shrink-0 ml-1" />}
                             </button>
                         </motion.li>
-                    ))}
+                    )})}
                 </AnimatePresence>
             </ul>
         </nav>
 
         <div className="mt-auto pt-4 border-t border-gray-700/50 space-y-1">
-            <SidebarButton icon={User} text="Account" onClick={onShowAccount} />
-            <SidebarButton icon={Lock} text="Change Password" onClick={() => navigate('/change-password')} />
-            <SidebarButton icon={Share2} text="Share Chat" onClick={onShareChat} />
-            <SidebarButton icon={Trash2} text="Delete Chat" onClick={onDeleteChat} danger />
+            <SidebarButton icon={LayoutDashboard} text="New Dashboard" onClick={() => {}} disabled={true} />
+            <SidebarButton icon={Trash2} text="Delete Chat" onClick={onDeleteChat} danger isAnimating={animatingButton === 'Delete Chat'} startAnimation={() => setAnimatingButton('Delete Chat')} onAnimationEnd={() => setAnimatingButton(null)} />
+            <div className="relative" ref={settingsRef}>
+                <SidebarButton icon={Settings} text="Settings" onClick={() => setShowSettings(s => !s)} isAnimating={animatingButton === 'Settings'} startAnimation={() => setAnimatingButton('Settings')} onAnimationEnd={() => setAnimatingButton(null)} />
+                 <AnimatePresence>
+                    {showSettings && <SettingsDropdown onAction={(action) => {
+                        if (action === 'contact') onShowContact();
+                        if (action === 'account') onShowAccount();
+                        if (action === 'share') onShareCode();
+                        if (action === 'clear') onClearHistory();
+                        if (action === 'logout') onLogout();
+                        setShowSettings(false);
+                    }} />}
+                </AnimatePresence>
+            </div>
         </div>
     </div>
-);
+)};
 
-const SidebarButton = ({ icon: Icon, text, onClick, danger = false }) => (
-    <button
-        onClick={onClick}
-        className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-sm font-medium transition-colors ${
-            danger ? 'text-red-400 hover:bg-red-500/20' : 'text-gray-300 hover:bg-gray-700/60'
-        }`}
-    >
-        <Icon className="w-5 h-5" />
-        {text}
-    </button>
-);
+const SidebarButton = ({ icon: Icon, text, onClick, danger = false, disabled = false, isAnimating, startAnimation, onAnimationEnd }) => {
+    const animationClass = useMemo(() => {
+        if (!isAnimating) return '';
+        if (text === 'Settings') return 'animate-gear-spin';
+        if (text === 'Delete Chat') return 'animate-trash-shake';
+        return '';
+    }, [isAnimating, text]);
 
-const ChatPanel = ({ messages, onPreviewFile }) => {
+    return (
+        <button
+            onClick={() => {
+                if(startAnimation) startAnimation();
+                onClick();
+            }}
+            disabled={disabled}
+            className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-sm font-medium transition-colors ${danger ? 'text-red-400 hover:bg-red-500/20' : 'text-gray-300 hover:bg-gray-700/60'} disabled:opacity-50 disabled:cursor-not-allowed`}
+        >
+            <div onAnimationEnd={onAnimationEnd} className={animationClass}>
+                <Icon className={`w-5 h-5 ${danger ? 'group-hover:text-red-300' : ''}`} />
+            </div>
+            {text}
+        </button>
+    );
+};
+
+const ChatPanel = ({ messages, onPreviewFile, onDeleteFile, activeChatId, userData }) => {
     const endOfMessagesRef = useRef(null);
     useEffect(() => {
         endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -807,122 +761,181 @@ const ChatPanel = ({ messages, onPreviewFile }) => {
 
     return (
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+            {messages.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
+                    <div className="w-16 h-16 mb-4 bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] rounded-2xl"></div>
+                    <h2 className="text-2xl font-bold text-gray-300">Welcome to Vizora Chat</h2>
+                    <p>Start a conversation or upload a file to begin.</p>
+                </div>
+            )}
             {messages.map((msg) => (
-                <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                >
+                <motion.div key={msg.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} >
                     {msg.sender === 'user' ? (
-                        <UserMessage message={msg} onPreviewFile={onPreviewFile} />
+                        <UserMessage message={msg} onPreviewFile={onPreviewFile} onDeleteFile={(messageId) => onDeleteFile(activeChatId, messageId)} userName={userData.name} />
+                    ) : msg.table ? (
+                        <BotTableMessage message={msg} />
                     ) : (
                         <BotMessage message={msg} />
                     )}
                 </motion.div>
             ))}
-
             <div ref={endOfMessagesRef} />
         </div>
     );
 };
 
-const UserMessage = ({ message, onPreviewFile }) => (
-    <div className="flex items-start gap-3 justify-end">
-        <div className="bg-[#0D7377] rounded-xl rounded-br-none p-4 max-w-lg">
-            {message.text && <p className="text-white text-base leading-relaxed">{message.text}</p>}
-            {message.file && <FileCard file={message.file} onPreview={() => onPreviewFile(message.file)} />}
+const UserMessage = ({ message, onPreviewFile, onDeleteFile, userName }) => {
+    const getInitials = (name) => {
+        if (!name) return 'G';
+        const nameParts = name.split(' ');
+        if (nameParts.length > 1 && nameParts[1]) {
+            return `${nameParts[0][0]}${nameParts[1][0]}`;
+        }
+        return name.charAt(0);
+    };
+
+    return (
+        <div className="flex items-start gap-3 justify-end">
+            <div className="bg-[#0D7377] rounded-xl rounded-br-none p-4 max-w-lg">
+                {message.text && <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{message.text}</p>}
+                {message.file && <FileCard file={message.file} onPreview={() => onPreviewFile(message.file.raw)} onDelete={() => onDeleteFile(message.id)} />}
+            </div>
+            <div className="w-8 h-8 rounded-full bg-gray-600 flex-shrink-0 flex items-center justify-center font-bold text-xs uppercase p-1">{getInitials(userName)}</div>
         </div>
-        <div className="w-8 h-8 rounded-full bg-gray-600 flex-shrink-0 flex items-center justify-center font-bold text-sm">
-            {message.file?.uploadedBy?.[0]?.toUpperCase() || 'U'}
+    );
+};
+
+const BotMessage = ({ message }) => (
+    <div className="flex items-start gap-3">
+        <BotAvatar />
+        <div className="bg-[#323232] rounded-xl rounded-bl-none p-4 max-w-lg">
+            {message.typing ? <TypingIndicator /> : <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{message.text}</p>}
         </div>
     </div>
 );
 
-const BotMessage = ({ message }) => (
-  <div>
-    <div>{message.text}</div>
-    {message.table && <TableComponent data={message.table} />}
-    {message.chart && <ChartComponent data={message.chart} type={message.chartType} />}
-    {message.sql && (
-      <details>
-        <summary>Show SQL</summary>
-        <pre>{message.sql}</pre>
-      </details>
-    )}
-  </div>
+// Table/SQL toggle bot message
+const BotTableMessage = ({ message }) => {
+    const { table } = message;
+    const [view, setView] = useState(table.view || 'table');
+    const [editingSql, setEditingSql] = useState(table.editingSql);
+    const [running, setRunning] = useState(false);
+    const [error, setError] = useState(null);
+    const [rows, setRows] = useState(table.rows);
+    const [columns, setColumns] = useState(table.columns);
+
+    const exportCsv = () => {
+        try {
+            const headerLine = columns.join(',');
+            const bodyLines = rows.map(r => columns.map(c => {
+                const val = r[c];
+                if (val == null) return '';
+                const s = String(val).replace(/"/g,'""');
+                return /[,"]/.test(s) ? `"${s}"` : s;
+            }).join(',')).join('\n');
+            const blob = new Blob([headerLine + '\n' + bodyLines], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'query_result.csv';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        } catch(err) { /* silent */ }
+    };
+
+    const rerun = async () => {
+        setRunning(true); setError(null);
+        try {
+            // message.table.fileIds preserved
+            const res = await tableQueryApi.run({ sql: editingSql, file_ids: table.fileIds });
+            setColumns(res.columns || []); setRows(res.rows || []);
+            setView('table');
+        } catch(err){
+            setError('Run failed');
+        } finally { setRunning(false); }
+    };
+
+    return (
+        <div className="flex items-start gap-3">
+            <BotAvatar />
+            <div className="bg-[#323232] rounded-xl rounded-bl-none p-4 max-w-full w-full md:max-w-3xl">
+                <div className="flex items-center gap-2 mb-3">
+                    <button onClick={() => setView('table')} className={`text-xs px-3 py-1.5 rounded-md font-semibold ${view==='table' ? 'bg-[#14FFEC] text-black':'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}>Table</button>
+                    <button onClick={() => setView('sql')} className={`text-xs px-3 py-1.5 rounded-md font-semibold ${view==='sql' ? 'bg-[#14FFEC] text-black':'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}>SQL</button>
+                    {view==='table' && <button onClick={exportCsv} className="ml-auto text-xs px-3 py-1.5 rounded-md font-semibold bg-gray-700 text-gray-200 hover:bg-gray-600">Export CSV</button>}
+                    {view==='sql' && <button onClick={rerun} disabled={running} className="ml-auto text-xs px-3 py-1.5 rounded-md font-semibold bg-[#0D7377] text-white hover:bg-[#14FFEC] hover:text-black disabled:opacity-50">{running? 'Running...':'Run SQL'}</button>}
+                </div>
+                {view === 'sql' ? (
+                    <div className="space-y-3">
+                        <textarea value={editingSql} onChange={e=>setEditingSql(e.target.value)} className="w-full h-40 bg-black/30 border border-gray-700 rounded-lg p-3 text-sm font-mono text-gray-200 resize-none focus:outline-none focus:ring-2 focus:ring-[#14FFEC]" />
+                        {error && <div className="text-xs text-red-400">{error}</div>}
+                    </div>
+                ) : (
+                    <div className="overflow-auto max-h-96 border border-gray-700 rounded-lg custom-scrollbar">
+                        <table className="w-full text-xs text-left text-gray-300">
+                            <thead className="bg-gray-800 sticky top-0"><tr>{columns.map(c => <th key={c} className="px-3 py-2 font-semibold text-gray-200">{c}</th>)}</tr></thead>
+                            <tbody>{rows.map((r,i) => <tr key={i} className="odd:bg-gray-800/40 hover:bg-gray-700/40">{columns.map(c => <td key={c} className="px-3 py-1.5 whitespace-nowrap max-w-xs truncate" title={r[c] != null ? String(r[c]) : ''}>{r[c] != null ? String(r[c]) : ''}</td>)}</tr>)}</tbody>
+                        </table>
+                        {rows.length === 0 && <div className="p-3 text-xs text-gray-400">No rows returned.</div>}
+                    </div>
+                )}
+                {view==='table' && <details className="mt-3 text-xs text-gray-400"><summary className="cursor-pointer select-none text-gray-300">Show SQL</summary><pre className="mt-2 p-2 bg-black/30 rounded-md overflow-auto text-[10px] whitespace-pre-wrap">{editingSql}</pre></details>}
+            </div>
+        </div>
+    );
+};
+
+const TypingIndicator = () => (
+    <div className="flex items-center gap-1.5">
+        <motion.div className="w-2 h-2 bg-gray-400 rounded-full" animate={{ scale: [1, 1.2, 1], y: [0, -2, 0] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }} />
+        <motion.div className="w-2 h-2 bg-gray-400 rounded-full" animate={{ scale: [1, 1.2, 1], y: [0, -2, 0] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.2 }} />
+        <motion.div className="w-2 h-2 bg-gray-400 rounded-full" animate={{ scale: [1, 1.2, 1], y: [0, -2, 0] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.4 }} />
+    </div>
 );
 
-
-const FileCard = ({ file, onPreview }) => (
+const FileCard = ({ file, onPreview, onDelete }) => (
     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mt-3 bg-black/30 rounded-lg p-3 flex items-center gap-3">
         <div className="p-2 bg-gray-600 rounded-md">
             {file.type === 'CSV' ? <FileText className="w-6 h-6 text-[#14FFEC]" /> : <HardDrive className="w-6 h-6 text-[#14FFEC]" />}
         </div>
-        <div className="flex-1 text-sm">
+        <div className="flex-1 text-sm min-w-0">
             <p className="font-semibold text-white truncate">{file.name}</p>
             <p className="text-gray-400">{file.size}</p>
         </div>
-        <button onClick={onPreview} className="bg-[#14FFEC] text-black px-3 py-1 rounded-md text-xs font-semibold hover:bg-white transition-colors">
-            Preview
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+            <button onClick={onDelete} className="text-gray-400 hover:text-red-400 transition-colors p-1"><Trash2 className="w-4 h-4" /></button>
+            <button onClick={onPreview} className="bg-[#14FFEC] text-black px-3 py-1 rounded-md text-xs font-semibold hover:bg-white transition-colors"> Preview </button>
+        </div>
     </motion.div>
 );
 
-const ChatInput = ({ onSendMessage, onUploadClick, disableSend }) => {
+const ChatInput = ({ onSendMessage, onUploadClick }) => {
     const [input, setInput] = useState('');
+    const textareaRef = useRef(null);
+
     const handleSubmit = (e) => { e.preventDefault(); if (input.trim()) { onSendMessage(input.trim()); setInput(''); } };
     const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e); } }
+
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (el) {
+            el.style.height = 'auto';
+            el.style.height = `${el.scrollHeight}px`;
+        }
+    }, [input]);
 
     return (
         <div className="p-4 bg-transparent">
             <form onSubmit={handleSubmit} className="flex items-center gap-3 bg-[#323232] rounded-xl p-2.5 shadow-2xl border border-gray-700/50 focus-within:ring-2 focus-within:ring-[#14FFEC] transition-all duration-300">
                 <button type="button" onClick={onUploadClick} className="p-2 rounded-full hover:bg-gray-600/50 transition-colors"><Plus className="w-6 h-6 text-gray-300" /></button>
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Ask Vizora..." rows="1" className="flex-1 bg-transparent text-gray-200 text-base placeholder-gray-500 focus:outline-none resize-none max-h-40 custom-scrollbar" />
-                <button
-                  type="submit"
-                  className="p-2 rounded-full hover:bg-gray-600/50 transition-colors disabled:opacity-50"
-                  disabled={!input.trim()}
-                >
-                  <ArrowRight className="w-6 h-6 text-gray-300" />
-                </button>
+                <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Ask Vizora..." rows="1" className="flex-1 bg-transparent text-gray-200 text-base placeholder-gray-500 focus:outline-none resize-none max-h-40 custom-scrollbar" />
+                <button type="submit" className="p-2 rounded-full hover:bg-gray-600/50 transition-colors disabled:opacity-50" disabled={!input.trim()}><ArrowRight className="w-6 h-6 text-gray-300" /></button>
             </form>
         </div>
     );
 };
 
-const HelpDropdown = ({ onAction }) => (
-    <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: -10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: -10 }}
-        transition={{ duration: 0.15 }}
-        className="absolute top-full right-0 mt-2 w-64 bg-[#323232] border border-gray-700 rounded-lg shadow-xl z-50 p-2"
-    >
-        <ul>
-            <HelpItem text="Start New Chat" onClick={() => onAction('newChat')} />
-            <HelpItem text="Manage Account" onClick={() => onAction('account')} />
-            <HelpItem text="Clear History" onClick={() => onAction('clear')} />
-            <HelpItem text="Upload File" onClick={() => onAction('upload')} />
-        </ul>
-        <div className="text-xs text-gray-500 text-center pt-2 mt-2 border-t border-gray-700/50">
-            Vizora can make mistakes. Consider checking important information.
-        </div>
-    </motion.div>
-);
-
-const HelpItem = ({ text, onClick }) => (
-    <li>
-        <button onClick={onClick} className="w-full flex justify-between items-center p-2 rounded-md hover:bg-gray-700/60 transition-colors text-left text-sm">
-            <span>{text}</span>
-        </button>
-    </li>
-);
-
-const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange, onLogout }) => (
+const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange }) => (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center" onClick={onClose}>
-        <motion.div
-            initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+        <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
             className="bg-[#323232] rounded-xl w-full max-w-md p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
             <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
             <h2 className="text-2xl font-bold mb-6 text-white">Account Settings</h2>
@@ -930,7 +943,6 @@ const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange
                 <InfoDisplay label="Name" value={userData.name} />
                 <InfoDisplay label="Email" value={userData.email} />
                 <button onClick={onShowPasswordChange} className="w-full text-sm py-2.5 px-4 rounded-lg border border-gray-600 hover:bg-gray-700/60 transition-colors">Change Password</button>
-                <button onClick={onLogout} className="w-full text-sm py-2.5 px-4 rounded-lg border border-gray-600 hover:bg-gray-700/60 transition-colors">Logout</button>
             </div>
             <div className="mt-8 pt-6 border-t border-gray-700/50">
                 <h3 className="text-lg font-semibold text-red-400 mb-2">Danger Zone</h3>
@@ -941,96 +953,73 @@ const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange
     </motion.div>
 );
 
-const InfoDisplay = ({ label, value }) => (
-    <div>
-        <label className="block text-sm font-medium text-gray-400 mb-1">{label}</label>
-        <div className="w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200">
-            {value}
-        </div>
-    </div>
-);
+const InfoDisplay = ({ label, value }) => ( <div> <label className="block text-sm font-medium text-gray-400 mb-1">{label}</label> <div className="w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"> {value} </div> </div> );
+
+const PasswordChangeModal = ({ onClose, showToast }) => {
+    const [passwords, setPasswords] = useState({ old: '', new: '', confirm: '' });
+    const handleChange = (e) => setPasswords({ ...passwords, [e.target.name]: e.target.value });
+    const handleSubmit = () => {
+        if (passwords.new.length < 8) { return showToast("New password must be at least 8 characters.", "error"); }
+        if (passwords.new !== passwords.confirm) { return showToast("New passwords do not match.", "error"); }
+        showToast("Password changed successfully!", "success");
+        onClose();
+    };
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={onClose}>
+            <motion.div initial={{ scale: 0.9, y: 20, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.9, y: 20, opacity: 0 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className="bg-[#2a2a2a] rounded-xl w-full max-w-sm p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
+                <h2 className="text-xl font-bold mb-6 text-white">Change Password</h2>
+                <div className="space-y-4">
+                    <InputField label="Old Password" id="old" name="old" type="password" value={passwords.old} onChange={handleChange} />
+                    <InputField label="New Password" id="new" name="new" type="password" value={passwords.new} onChange={handleChange} />
+                    <InputField label="Confirm Password" id="confirm" name="confirm" type="password" value={passwords.confirm} onChange={handleChange} />
+                </div>
+                <div className="mt-6 flex gap-3">
+                    <button onClick={onClose} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-gray-300 bg-gray-700/60 hover:opacity-80 transition-opacity">Cancel</button>
+                    <button onClick={handleSubmit} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#2a2a2a] focus:ring-[#14FFEC] shadow-[0_0_15px_rgba(20,255,236,0)] hover:shadow-[0_0_15px_rgba(20,255,236,0.5)]">Submit</button>
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+};
+
+const InputField = ({ label, id, ...props }) => ( <div> <label htmlFor={id} className="block text-sm font-medium text-gray-400 mb-1">{label}</label> <input id={id} className="w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]" {...props} /> </div> );
 
 const FilePreviewModal = ({ file, onClose }) => {
-    const [data, setData] = useState(null);
-    const [headers, setHeaders] = useState([]);
-    const [error, setError] = useState('');
-    const [activeSheet, setActiveSheet] = useState(0);
-    const [workbook, setWorkbook] = useState(null);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [searchTerm, setSearchTerm] = useState('');
-    const rowsPerPage = 10;
-
+    const [data, setData] = useState(null); const [headers, setHeaders] = useState([]); const [error, setError] = useState(''); const [activeSheet, setActiveSheet] = useState(0); const [workbook, setWorkbook] = useState(null); const [currentPage, setCurrentPage] = useState(1); const [searchTerm, setSearchTerm] = useState(''); const rowsPerPage = 10;
     useEffect(() => {
         if (!window.Papa || !window.XLSX) { setError("File parsing libraries are loading..."); return; }
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
-                if (file.type === 'CSV') {
-                    const result = window.Papa.parse(e.target.result, { header: true, skipEmptyLines: true });
-                    if(result.errors.length) throw new Error("Parsing error");
-                    setHeaders(result.meta.fields);
-                    setData(result.data);
+                if (file.type === 'text/csv') {
+                    const result = window.Papa.parse(e.target.result, { header: true, skipEmptyLines: true }); if(result.errors.length) throw new Error("Parsing error"); setHeaders(result.meta.fields); setData(result.data);
                 } else {
-                    const wb = window.XLSX.read(e.target.result, { type: 'binary' });
-                    setWorkbook(wb);
-                    const sheetName = wb.SheetNames[activeSheet];
-                    const ws = wb.Sheets[sheetName];
-                    const jsonData = window.XLSX.utils.sheet_to_json(ws, { header: 1 });
-                    setHeaders(jsonData[0] || []);
-                    setData(jsonData.slice(1).map(row => (jsonData[0] || []).reduce((obj, h, i) => ({...obj, [h]: row[i]}), {})));
+                    const wb = window.XLSX.read(e.target.result, { type: 'binary' }); setWorkbook(wb); const sheetName = wb.SheetNames[activeSheet]; const ws = wb.Sheets[sheetName]; const jsonData = window.XLSX.utils.sheet_to_json(ws, { header: 1 }); setHeaders(jsonData[0] || []); setData(jsonData.slice(1).map(row => (jsonData[0] || []).reduce((obj, h, i) => ({...obj, [h]: row[i]}), {})));
                 }
             } catch (err) { setError("Failed to parse file."); }
         };
         reader.onerror = () => setError("Failed to read the file.");
-        if (file.type === 'XLSX') { reader.readAsBinaryString(file.raw); } else { reader.readAsText(file.raw); }
+        if (file.type.includes('sheet')) { reader.readAsBinaryString(file); } else { reader.readAsText(file); }
     }, [file, activeSheet]);
-
     const handleSheetChange = (sheetIndex) => {
-        if (!window.XLSX || !workbook) return;
-        setActiveSheet(sheetIndex);
-        const sheetName = workbook.SheetNames[sheetIndex];
-        const ws = workbook.Sheets[sheetName];
-        const jsonData = window.XLSX.utils.sheet_to_json(ws, { header: 1 });
-        setHeaders(jsonData[0] || []);
-        setData(jsonData.slice(1).map(row => (jsonData[0] || []).reduce((obj, h, i) => ({...obj, [h]: row[i]}), {})));
-        setCurrentPage(1);
+        if (!window.XLSX || !workbook) return; setActiveSheet(sheetIndex); const sheetName = workbook.SheetNames[sheetIndex]; const ws = workbook.Sheets[sheetName]; const jsonData = window.XLSX.utils.sheet_to_json(ws, { header: 1 }); setHeaders(jsonData[0] || []); setData(jsonData.slice(1).map(row => (jsonData[0] || []).reduce((obj, h, i) => ({...obj, [h]: row[i]}), {}))); setCurrentPage(1);
     }
-
-    const filteredData = useMemo(() => {
-        if (!data) return [];
-        if (!searchTerm) return data;
-        return data.filter(row => Object.values(row).some(val => String(val).toLowerCase().includes(searchTerm.toLowerCase())));
-    }, [data, searchTerm]);
-
-    const paginatedData = useMemo(() => {
-        const startIndex = (currentPage - 1) * rowsPerPage;
-        return filteredData.slice(startIndex, startIndex + rowsPerPage);
-    }, [filteredData, currentPage]);
-
+    const filteredData = useMemo(() => { if (!data) return []; if (!searchTerm) return data; return data.filter(row => Object.values(row).some(val => String(val).toLowerCase().includes(searchTerm.toLowerCase()))); }, [data, searchTerm]);
+    const paginatedData = useMemo(() => { const startIndex = (currentPage - 1) * rowsPerPage; return filteredData.slice(startIndex, startIndex + rowsPerPage); }, [filteredData, currentPage]);
     const totalPages = Math.ceil(filteredData.length / rowsPerPage);
-
     return (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={onClose}>
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} className="bg-[#212121] rounded-xl w-full max-w-4xl h-[90vh] flex flex-col border border-gray-700/50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <header className="p-4 flex items-center justify-between border-b border-gray-700/50 flex-shrink-0">
-                    <h2 className="text-xl font-bold mb-2 text-white truncate">{file.name}</h2>
-                    <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors">
-                        <X className="w-5 h-5" />
-                    </button>
+                    <h2 className="text-xl font-bold text-white truncate">{file.name}</h2> <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
                 </header>
-
                 <div className="p-4 flex-shrink-0 flex flex-col md:flex-row gap-4 items-center">
-                    {workbook && (
-                        <select value={activeSheet} onChange={(e) => handleSheetChange(parseInt(e.target.value))} className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">
-                            {workbook.SheetNames.map((name, index) => (<option key={name} value={index}>{name}</option>))}
-                        </select>
-                    )}
+                    {workbook && (<select value={activeSheet} onChange={(e) => handleSheetChange(parseInt(e.target.value))} className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">{workbook.SheetNames.map((name, index) => (<option key={name} value={index}>{name}</option>))}</select>)}
                     <div className="relative flex-grow w-full md:w-auto">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                        <input type="text" placeholder="Search table..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"/>
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" /> <input type="text" placeholder="Search table..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"/>
                     </div>
                 </div>
-
                 <div className="flex-1 overflow-auto custom-scrollbar p-4">
                     {error ? <div className="text-red-400">{error}</div> : !data ? <div className="text-gray-400">Loading data...</div> : (
                         <table className="w-full text-sm text-left text-gray-300">
@@ -1039,7 +1028,6 @@ const FilePreviewModal = ({ file, onClose }) => {
                         </table>
                     )}
                 </div>
-
                 <footer className="p-4 border-t border-gray-700/50 flex-shrink-0 flex items-center justify-between text-sm">
                     <span className="text-gray-400">Showing {paginatedData.length > 0 ? (currentPage - 1) * rowsPerPage + 1 : 0}-{Math.min(currentPage * rowsPerPage, filteredData.length)} of {filteredData.length}</span>
                     <div className="flex items-center gap-2">
@@ -1051,164 +1039,207 @@ const FilePreviewModal = ({ file, onClose }) => {
             </motion.div>
         </motion.div>
     );
+}
+
+const FileDashboardModal = ({ chat, onClose, onConfirm }) => {
+    const [selectedFileId, setSelectedFileId] = useState(null);
+
+    const uploadedFilesWithMsgId = useMemo(() => {
+        return chat?.messages
+            .filter(msg => msg.file)
+            .map(msg => ({ file: msg.file, msgId: msg.id })) || [];
+    }, [chat]);
+
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4" onClick={onClose}>
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className="bg-[#323232] rounded-xl w-full max-w-md p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
+                <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
+                <h2 className="text-2xl font-bold mb-2 text-white">Select a File</h2>
+                <p className="text-sm text-gray-400 mb-6">Choose a file to focus on from: <span className="font-medium text-gray-300 truncate">{chat?.title || 'this chat'}</span></p>
+
+                <div className="max-h-80 overflow-y-auto custom-scrollbar pr-2 -mr-2">
+                    {uploadedFilesWithMsgId.length > 0 ? (
+                        <fieldset className="space-y-3">
+                             <legend className="sr-only">Uploaded Files</legend>
+                            {uploadedFilesWithMsgId.map(({ file, msgId }) => (
+                                <label key={msgId} htmlFor={msgId} className={`bg-gray-800/50 p-3 rounded-lg flex items-center gap-3 cursor-pointer transition-all border-2 ${selectedFileId === msgId ? 'border-[#14FFEC]' : 'border-transparent hover:border-gray-600'}`}>
+                                    <input
+                                        type="radio"
+                                        id={msgId}
+                                        name="fileSelection"
+                                        value={msgId}
+                                        checked={selectedFileId === msgId}
+                                        onChange={() => setSelectedFileId(msgId)}
+                                        className="h-4 w-4 text-[#14FFEC] bg-gray-700 border-gray-600 focus:ring-[#14FFEC] focus:ring-2"
+                                    />
+                                    <div className="p-2 bg-gray-600 rounded-md">
+                                        {file.type === 'CSV' ? <FileText className="w-5 h-5 text-[#14FFEC]" /> : <HardDrive className="w-5 h-5 text-[#14FFEC]" />}
+                                    </div>
+                                    <div className="flex-1 text-sm">
+                                        <p className="font-semibold text-white truncate">{file.name}</p>
+                                        <p className="text-gray-400">{file.size}</p>
+                                    </div>
+                                </label>
+                            ))}
+                        </fieldset>
+                    ) : ( <div className="text-center py-8 text-gray-500"><FileX2 className="w-10 h-10 mx-auto mb-2" /><p>No files have been uploaded in this chat.</p></div> )}
+                </div>
+                 <div className="mt-6 flex justify-end">
+                    <button onClick={() => { if(selectedFileId) onConfirm(selectedFileId)}} disabled={!selectedFileId} className="py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Done</button>
+                </div>
+            </motion.div>
+        </motion.div>
+    );
 };
 
-const Toast = ({ message, type, onClose }) => (
-    <motion.div
-        layout
-        initial={{ opacity: 0, y: 50, scale: 0.3 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 20, scale: 0.5 }}
-        className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 p-4 rounded-lg shadow-2xl border ${
-            type === 'error'
-                ? 'bg-red-500/20 border-red-500/30 text-red-300'
-                : 'bg-green-500/20 border-green-500/30 text-green-300'
-        }`}
-    >
-        {type === 'error' ? <FileX2 className="w-6 h-6" /> : <CornerDownLeft className="w-6 h-6" />}
+const ContactModal = ({ onClose, showToast }) => {
+    const [query, setQuery] = useState('');
+    const [attachment, setAttachment] = useState(null);
+    const contactFileInputRef = useRef(null);
+
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            setAttachment(file);
+        }
+    };
+
+    const handleSubmit = () => {
+        if (!query.trim()) {
+            return showToast("Please enter your query before submitting.", "error");
+        }
+        // In a real app, you would handle the form submission here (e.g., API call)
+        console.log("Submitting Query:", { query, attachment });
+        showToast("Your query has been submitted successfully!", "success");
+        onClose();
+    };
+
+    const removeAttachment = () => {
+        setAttachment(null);
+        if(contactFileInputRef.current) {
+            contactFileInputRef.current.value = "";
+        }
+    }
+
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className="bg-[#323232] rounded-xl w-full max-w-lg p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
+                <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
+                <h2 className="text-2xl font-bold mb-4 text-white">Contact Support</h2>
+                <div className="space-y-4">
+                    <textarea
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Tell us your queries..."
+                        rows="6"
+                        className="w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC] custom-scrollbar resize-none"
+                    />
+                    <input type="file" accept="image/*" onChange={handleFileChange} ref={contactFileInputRef} className="hidden" id="contact-file-upload" />
+
+                    {!attachment ? (
+                        <button onClick={() => contactFileInputRef.current?.click()} className="w-full flex items-center justify-center gap-2 text-sm py-2.5 px-4 rounded-lg border border-dashed border-gray-600 hover:bg-gray-700/60 transition-colors text-gray-400">
+                           <Paperclip className="w-4 h-4" /> Attach an image (optional)
+                        </button>
+                    ) : (
+                        <div className="bg-gray-800/50 p-2.5 rounded-lg flex items-center justify-between text-sm">
+                            <span className="truncate text-gray-300">{attachment.name}</span>
+                            <button onClick={removeAttachment} className="p-1 rounded-full hover:bg-gray-700 transition-colors"><X className="w-4 h-4 text-gray-400"/></button>
+                        </div>
+                    )}
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                    <button onClick={onClose} className="py-2 px-5 rounded-lg text-sm font-semibold text-gray-300 bg-gray-700/60 hover:opacity-80 transition-opacity">Cancel</button>
+                    <button onClick={handleSubmit} className="flex items-center gap-2 py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors disabled:opacity-50" disabled={!query.trim()}>
+                        Submit <Send className="w-4 h-4" />
+                    </button>
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+};
+
+const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirmText = "Confirm", cancelText = "Cancel", icon: Icon = AlertTriangle, iconColor = 'text-red-400', iconBgColor = 'bg-red-500/20', isLogout = false }) => {
+    if (!isOpen) return null;
+
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className="bg-[#323232] rounded-xl w-full max-w-sm p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-start gap-4">
+                    <div className={`mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full ${iconBgColor} sm:mx-0 sm:h-10 sm:w-10`}>
+                        <Icon className={`h-6 w-6 ${iconColor}`} aria-hidden="true" />
+                    </div>
+                    <div className="mt-0 text-left">
+                        <h3 className="text-lg leading-6 font-bold text-white" id="modal-title">
+                            {title}
+                        </h3>
+                        <div className="mt-2">
+                            <p className="text-sm text-gray-400">
+                                {isLogout ? (
+                                    <>
+                                        Oh! <motion.span animate={{ y: [0, -2, 0], scale: [1, 1.1, 1] }} transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }} className="inline-block">🥺</motion.span> We're going to miss you. Come back soon, I'll be here for you anytime!
+                                    </>
+                                ) : message}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                    <button type="button" onClick={onClose} className="py-2 px-5 rounded-lg text-sm font-semibold text-gray-300 bg-gray-700/60 hover:opacity-80 transition-opacity">
+                        {cancelText}
+                    </button>
+                    <button type="button" onClick={() => { onConfirm(); onClose(); }} className={`py-2 px-5 rounded-lg text-sm font-semibold text-white ${ (title.includes('Delete') || isLogout) ? 'bg-red-600 hover:bg-red-700' : 'bg-[#0D7377] hover:bg-[#14FFEC]' } transition-colors`}>
+                        {confirmText}
+                    </button>
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+};
+
+const ShareCodeModal = ({ isOpen, onClose, code, showToast }) => {
+    if (!isOpen) return null;
+
+    const handleCopy = () => {
+        navigator.clipboard.writeText(code)
+            .then(() => showToast(`Code "${code}" copied to clipboard!`, "success"))
+            .catch(() => showToast('Failed to copy code.', 'error'));
+    };
+
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className="bg-[#323232] rounded-xl w-full max-w-sm p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
+                <h2 className="text-2xl font-bold mb-2 text-white">Share Chat</h2>
+                <p className="text-sm text-gray-400 mb-6">Share this code to let others view a copy of this conversation.</p>
+                <div className="bg-gray-800/50 p-4 rounded-lg flex items-center justify-between gap-4">
+                    <span className="font-mono text-2xl tracking-widest text-[#14FFEC]">{code}</span>
+                    <button onClick={handleCopy} className="p-2 rounded-lg hover:bg-gray-700/60 transition-colors flex-shrink-0">
+                        <Clipboard className="w-5 h-5 text-gray-300" />
+                    </button>
+                </div>
+                <div className="mt-6 flex justify-end">
+                    <button onClick={onClose} className="py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors">Done</button>
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+};
+
+const Toast = ({ message, type, onClose, action }) => (
+    <motion.div layout initial={{ opacity: 0, y: 50, scale: 0.3 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.5 }} className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 p-4 rounded-lg shadow-2xl border ${ type === 'error' ? 'bg-red-500/20 border-red-500/30 text-red-300' : 'bg-green-500/20 border-green-500/30 text-green-300' }`}>
+        {type === 'error' ? <FileX2 className="w-6 h-6" /> : <Info className="w-6 h-6" />}
         <p className="font-semibold">{message}</p>
-        <button onClick={onClose} className="p-1 rounded-full hover:bg-gray-700/80 transition-colors">
-            <X className="w-4 h-4" />
-        </button>
+        {action && (
+            <button
+                onClick={() => { action.onClick(); onClose(); }}
+                className="ml-2 font-bold uppercase text-sm tracking-wider bg-white/10 px-3 py-1 rounded-md hover:bg-white/20"
+            >
+                {action.label}
+            </button>
+        )}
+        <button onClick={onClose} className="p-1 rounded-full hover:bg-white/10 transition-colors ml-auto"><X className="w-4 h-4"/></button>
     </motion.div>
 );
-
-const TitleModal = ({ onClose, onConfirm, value, onChange }) => (
-  <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-    onClick={onClose}
-  >
-    <motion.div
-      initial={{ scale: 0.9, y: 20 }}
-      animate={{ scale: 1, y: 0 }}
-      exit={{ scale: 0.9, y: 20 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-      className="bg-[#323232] rounded-xl w-full max-w-md p-6 border border-gray-700/50 shadow-2xl relative"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <button
-        onClick={onClose}
-        className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"
-      >
-        <X className="w-5 h-5" />
-      </button>
-      <h2 className="text-2xl font-bold mb-4 text-white">New Chat Title</h2>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-[#14FFEC] mb-4"
-        placeholder="Enter a title for the new chat"
-      />
-      <div className="flex justify-end gap-2">
-        <button
-          onClick={onClose}
-          className="flex-1 bg-gray-700 rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-gray-600 transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onConfirm}
-          className="flex-1 bg-[#0D7377] rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-[#14FFEC] transition-colors"
-        >
-          Create Chat
-        </button>
-      </div>
-    </motion.div>
-  </motion.div>
-);
-
-
-
-// --- FileUploadPreviewModal ---
-const FileUploadPreviewModal = ({ file, previewRows, onCancel, onConfirm }) => (
-  <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-    onClick={onCancel}
-  >
-    <motion.div
-      initial={{ scale: 0.9, y: 20 }}
-      animate={{ scale: 1, y: 0 }}
-      exit={{ scale: 0.9, y: 20 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-      className="bg-[#323232] rounded-xl w-full max-w-2xl p-6 border border-gray-700/50 shadow-2xl relative"
-      onClick={e => e.stopPropagation()}
-    >
-      <button
-        onClick={onCancel}
-        className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"
-      >
-        <X className="w-5 h-5" />
-      </button>
-      <h2 className="text-xl font-bold mb-4 text-white">Preview: {file.name}</h2>
-      <div className="overflow-x-auto mb-4">
-        <table className="w-full text-sm bg-gray-800 rounded">
-          <thead>
-            <tr>
-              {previewRows[0] && Object.keys(previewRows[0]).map(h => (
-                <th key={h} className="px-4 py-2">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {previewRows.map((row, i) => (
-              <tr key={i}>
-                {Object.values(row).map((val, j) => (
-                  <td key={j} className="px-4 py-2">{String(val)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="flex justify-end gap-2">
-        <button
-          onClick={onCancel}
-          className="bg-gray-700 rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-gray-600 transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onConfirm}
-          className="bg-[#0D7377] rounded-lg px-4 py-2 text-sm font-semibold text-white hover:bg-[#14FFEC] transition-colors"
-        >
-          Upload
-        </button>
-      </div>
-    </motion.div>
-  </motion.div>
-);
-
-// --- TableComponent and ChartComponent (dummy, replace with real chart/table if needed) ---
-const TableComponent = ({ data }) => (
-  <div className="overflow-x-auto my-2">
-    <table className="w-full text-sm bg-gray-800 rounded">
-      <thead>
-        <tr>
-          {data.columns.map(col => <th key={col} className="px-4 py-2">{col}</th>)}
-        </tr>
-      </thead>
-      <tbody>
-        {data.rows.map((row, i) => (
-          <tr key={i}>
-            {data.columns.map(col => <td key={col}>{row[col]}</td>)}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
-
-const ChartComponent = ({ data, type }) => (
-  <div className="my-2 p-4 bg-gray-900 rounded text-gray-300">
-    {/* Replace with real chart rendering */}
-    <div>[{type} chart preview here]</div>
-  </div>
-);
-
