@@ -1,0 +1,8 @@
+{
+  "name": "Vizora",
+  "short_name": "Vizora",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#212121",
+  "description": "Vizora AI Assistant"
+}

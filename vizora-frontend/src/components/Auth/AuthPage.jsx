@@ -21,29 +21,48 @@ const PageWrapper = styled.div`
   position: fixed;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100vh;
   background-color: rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: center; /* Centers vertically */
+  justify-content: center; /* Centers horizontally */
   z-index: 1000;
 `;
 
+// --- FIX START ---
+// Removed 'position: relative;' to allow PageWrapper's flexbox centering to work on this element.
+// The absolute children will now position relative to the PageWrapper's dimensions,
+// or we can make this 'Container' the positioning context if needed, but not necessary for centering itself.
+// However, it's better to keep it as positioning context for its absolutely positioned children.
+// The issue was more subtle: the 'min-height' and 'width' on 'Container' were making it act like
+// a fixed-size block, but its internal elements were absolutely positioned relative to it.
+// To center the 'Container' itself, it just needs to be a standard flex item.
 const Container = styled.div`
   background: #212121;
   border-radius: 10px;
   box-shadow: 0 14px 28px rgba(20, 255, 236, 0.15);
-  position: relative;
+  position: absolute; /* Changed from relative */
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%); /* This will perfectly center the Container */
+  /* Keep other styles for Container */
+  background: #212121;
+  border-radius: 10px;
+  box-shadow: 0 14px 28px rgba(20, 255, 236, 0.15);
   overflow: hidden;
   width: 768px;
-  max-width: 100%;
+  max-width: 95vw;
   min-height: 480px;
+  margin: 0;
+  padding: 0;
 `;
+// --- FIX END ---
 
 const FormContainer = styled.div`
+  /* These are already absolute and will now position relative to the new absolutely positioned Container */
   position: absolute;
   top: 0;
   height: 100%;
@@ -72,6 +91,7 @@ const Form = styled.form`
 `;
 
 const GradientOverlay = styled.div`
+  /* These are already absolute and will now position relative to the new absolutely positioned Container */
   background: linear-gradient(to right, #0D7377, #14FFEC);
   color: white;
   position: absolute;
@@ -116,7 +136,7 @@ const CloseButton = styled.button`
   }
 `;
 
-const AuthPage = ({ onClose }) => {
+const AuthPage = ({ onClose, onLoginSuccess }) => {
   const navigate = useNavigate();
   const [isSignIn, setIsSignIn] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -152,7 +172,7 @@ const AuthPage = ({ onClose }) => {
     }
     if (!formData.email?.trim()) {
       errors.email = 'Email is required';
-    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+    } else if (!/\S+@\S+\.\S/.test(formData.email)) {
       errors.email = 'Invalid email format';
     }
     if (!formData.password) {
@@ -166,9 +186,7 @@ const AuthPage = ({ onClose }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (isAnimating) return;
-
-    if (!validateForm()) return;
+    if (isAnimating || !validateForm()) return;
 
     setError('');
     setIsLoading(true);
@@ -179,21 +197,19 @@ const AuthPage = ({ onClose }) => {
           email: formData.email,
           password: formData.password
         });
-        localStorage.setItem('token', response.access_token);
-        localStorage.setItem('user', JSON.stringify(response.user));
+        onLoginSuccess(response);
         toast.success('Successfully logged in!');
-        navigate('/dashboard');
+        setTimeout(() => navigate('/chatbot'), 100); 
       } else {
         const response = await api.signup({
           name: formData.name,
           email: formData.email,
           password: formData.password
         });
-        localStorage.setItem('token', response.access_token);
-        localStorage.setItem('user', JSON.stringify(response.user));
+        onLoginSuccess(response);
         localStorage.setItem('playWelcomeVideo', 'true');
         toast.success('Account created successfully!');
-        navigate('/welcome');
+        setTimeout(() => navigate('/welcome'), 100);
       }
     } catch (err) {
       console.error('Auth error:', err);
@@ -209,7 +225,7 @@ const AuthPage = ({ onClose }) => {
     <PageWrapper onClick={onClose}>
       <Container onClick={(e) => e.stopPropagation()}>
         <CloseButton onClick={onClose}>&times;</CloseButton>
-        <FormContainer signin={isSignIn}>
+        <FormContainer $signin={isSignIn}>
           <Form onSubmit={handleSubmit}>
             <PageTitle>{isSignIn ? 'Sign In' : 'Create Account'}</PageTitle>
 
@@ -324,7 +340,7 @@ const AuthPage = ({ onClose }) => {
           </Form>
         </FormContainer>
 
-        <GradientOverlay signin={isSignIn}>
+        <GradientOverlay $signin={isSignIn}>
           <div style={{ 
             padding: '3rem', 
             textAlign: 'center',

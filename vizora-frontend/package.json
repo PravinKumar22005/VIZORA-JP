@@ -12,13 +12,17 @@
     "@testing-library/react": "^15.0.0",
     "@testing-library/user-event": "^13.5.0",
     "axios": "^1.11.0",
+    "framer-motion": "^12.23.12",
+    "lucide-react": "^0.542.0",
+    "papaparse": "^5.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^7.8.2",
     "react-scripts": "5.0.1",
     "react-toastify": "^11.0.5",
     "styled-components": "^6.1.19",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "xlsx": "^0.18.5"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -32,6 +36,7 @@
       "react-app/jest"
     ]
   },
+  "proxy": "http://localhost:8000",
   "browserslist": {
     "production": [
       ">0.2%",
