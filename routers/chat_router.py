@@ -1,9 +1,13 @@
+from controllers import message_controller
+
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from typing import List
 from models.user import User
 from utils.jwt import get_current_user
 from pydantic import BaseModel
 from controllers import chat_controller
+from controllers import chat_controller_delete
 from utils.azure_blob import upload_file_to_azure
 import pandas as pd
 import io
@@ -21,6 +25,37 @@ class MessageCreate(BaseModel):
     sender: str
 
 
+class ChatUpdate(BaseModel):
+    is_active: int
+
+
+@router.delete("/messages/permanent/{message_id}")
+def delete_message_permanently(
+    message_id: int,
+    user: User = Depends(get_current_user),
+):
+    return message_controller.delete_message_permanently(user.id, message_id)
+
+
+@router.delete("/chats/{chat_id}/permanent", response_model=dict)
+def delete_chat_permanently(
+    chat_id: int,
+    user: User = Depends(get_current_user),
+):
+    return chat_controller_delete.delete_chat_permanently(user.id, chat_id)
+
+
+@router.patch("/chats/{chat_id}", response_model=dict)
+def update_chat_is_active(
+    chat_id: int,
+    chat_update: ChatUpdate,
+    user: User = Depends(get_current_user),
+):
+    return chat_controller.update_chat_is_active(
+        user.id, chat_id, chat_update.is_active
+    )
+
+
 @router.post("/chats", response_model=dict)
 def create_chat(
     chat: ChatCreate,
@@ -29,9 +64,16 @@ def create_chat(
     return chat_controller.create_chat(user.id, chat.title)
 
 
+# List active chats
 @router.get("/chats", response_model=List[dict])
 def list_chats(user: User = Depends(get_current_user)):
     return chat_controller.list_chats(user.id)
+
+
+# List deleted chats (for recycle bin)
+@router.get("/chats/deleted", response_model=List[dict])
+def list_deleted_chats(user: User = Depends(get_current_user)):
+    return chat_controller.list_deleted_chats(user.id)
 
 
 @router.post("/chats/{chat_id}/messages", response_model=dict)

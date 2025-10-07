@@ -1,3 +1,4 @@
+from controllers import file_controller
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
@@ -11,7 +12,13 @@ import io
 
 router = APIRouter()
 
-
+# Permanent delete endpoint for files
+@router.delete("/file/permanent/{file_id}")
+def delete_file_permanently(
+    file_id: int,
+    user: User = Depends(get_current_user),
+):
+    return file_controller.delete_file_permanently(user.id, file_id)
 class TableQueryRequest(BaseModel):
     file_ids: Optional[List[int]] = None  # For joins
     file_id: Optional[int] = None  # For single file

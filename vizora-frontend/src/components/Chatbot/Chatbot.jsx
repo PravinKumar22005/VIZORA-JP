@@ -1,6 +1,6 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { chatApi } from '../../services/chatApi';
-// Sharing API
 import { shareChat as shareChatApi, getSharedChat as getSharedChatApi } from '../../services/sharingApi';
 import { aiApi } from '../../services/aiApi';
 import { tableQueryApi } from '../../services/tableQueryApi';
@@ -8,6 +8,36 @@ import { dashboardApi } from '../../services/dashboardApi';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Search, Plus, Menu, X, User, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, Clipboard, Eye, LayoutDashboard, LifeBuoy, Paperclip, Send, AlertTriangle, Settings, MailOpen, Pencil, LogOut, Info } from 'lucide-react';
 // Note: PapaParse and XLSX are assumed to be loaded via script tags.
+
+const RecycleBinModal = ({ onClose, deletedChats, onRestoreChat, onDeleteChat }) => {
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                className="bg-[#232323] rounded-xl w-full max-w-2xl p-6 border border-gray-700/50 shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
+                <h2 className="text-2xl font-bold mb-6 text-white">Recycle Bin</h2>
+                <div>
+                    <h3 className="text-lg font-semibold text-gray-200 mb-2">Deleted Chats</h3>
+                    {deletedChats.length === 0 ? <div className="text-gray-500 mb-4">No deleted chats.</div> : (
+                        <div className="mb-4" style={{ maxHeight: '340px', overflowY: 'auto' }}>
+                            <ul className="space-y-2">
+                                {deletedChats.map(chat => (
+                                    <li key={chat.id} className="flex items-center justify-between bg-gray-800/50 p-3 rounded-lg">
+                                        <span className="text-white font-medium">{chat.title}</span>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => onRestoreChat(chat.id)} className="px-3 py-1 rounded bg-green-500/20 text-green-300 hover:bg-green-500/40 text-sm">Restore</button>
+                                            <button onClick={() => onDeleteChat(chat.id)} className="px-3 py-1 rounded bg-red-500/20 text-red-300 hover:bg-red-500/40 text-sm">Delete Permanently</button>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+};
 
 const BotAvatar = () => (
     <div className="w-8 h-8 rounded-full flex-shrink-0 bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] p-1.5 flex items-center justify-center">
@@ -20,6 +50,50 @@ const BotAvatar = () => (
 
 // --- Main App Component ---
 export default function App({ userData: externalUserData }) {
+    // --- Recycle Bin State ---
+    const [showRecycleBin, setShowRecycleBin] = useState(false);
+    const [deletedChats, setDeletedChats] = useState([]);
+
+    // Fetch soft-deleted chats when recycle bin is opened
+    useEffect(() => {
+        if (!showRecycleBin) return;
+        const fetchDeleted = async () => {
+            try {
+                const deleted = await chatApi.listDeletedChats();
+                setDeletedChats(deleted);
+            } catch (e) {
+                showToast('Failed to load recycle bin items', 'error');
+            }
+        };
+        fetchDeleted();
+    }, [showRecycleBin]);
+
+    // --- Recycle Bin Handlers (Chats only) ---
+    const handleRestoreChat = async (chatId) => {
+        try {
+            await chatApi.restoreChat(chatId);
+            // Refetch deleted chats after restore
+            const deleted = await chatApi.listDeletedChats();
+            setDeletedChats(deleted);
+            showToast('Chat restored', 'success');
+        } catch {
+            showToast('Failed to restore chat', 'error');
+        }
+    };
+    const handleDeleteChatPermanent = async (chatId) => {
+        try {
+            await chatApi.deleteChat(chatId);
+            // Refetch deleted chats after permanent delete
+            const deleted = await chatApi.listDeletedChats();
+            setDeletedChats(deleted);
+            showToast('Chat permanently deleted', 'success');
+        } catch {
+            showToast('Failed to permanently delete chat', 'error');
+        }
+    };
+    // Prevent sending new message while bot is replying
+    const [isBotReplying, setIsBotReplying] = useState(false);
+    const [isSendingMessage, setIsSendingMessage] = useState(false);
     // --- State Management ---
     const [chats, setChats] = useState([]); // each chat: {id,title,messages:[],files:[],loaded?:bool}
     const [activeChatId, setActiveChatId] = useState(null);
@@ -71,14 +145,23 @@ export default function App({ userData: externalUserData }) {
         const load = async () => {
             try {
                 const remoteChats = await chatApi.listChats();
+                // Always REPLACE chat state, never merge, and deduplicate by id
                 const enriched = remoteChats.map(c => ({ ...c, messages: [], files: [], loaded: false }));
-                setChats(enriched);
-                if (enriched.length > 0) setActiveChatId(enriched[0].id);
+                // Deduplicate by id
+                const deduped = Array.from(new Map(enriched.map(c => [c.id, c])).values());
+                setChats(deduped);
+                if (deduped.length > 0) {
+                    setActiveChatId(deduped[0].id);
+                } else {
+                    // If no chats, create a new chat on login
+                    handleNewChat();
+                }
             } catch (e) {
                 console.error('Failed to load chats', e);
             }
         };
         if (userData?.token) load();
+        // eslint-disable-next-line
     }, [userData?.token]);
 
     // Hydrate messages & files when switching to a chat not yet loaded
@@ -89,7 +172,29 @@ export default function App({ userData: externalUserData }) {
             try {
                 const msgs = await chatApi.getMessages(activeChatId);
                 const files = await chatApi.listFiles(activeChatId);
-                setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, messages: msgs, files, loaded: true, loading: false } : c));
+                // Parse special table messages
+                const parsedMsgs = msgs.map(m => {
+                    if (typeof m.text === 'string' && m.text.startsWith('__TABLE__:')) {
+                        try {
+                            const table = JSON.parse(m.text.replace('__TABLE__:', ''));
+                            return {
+                                ...m,
+                                table: {
+                                    ...table,
+                                    view: 'table',
+                                    editingSql: table.sql,
+                                    running: false,
+                                    error: null
+                                },
+                                text: undefined
+                            };
+                        } catch {
+                            return m;
+                        }
+                    }
+                    return m;
+                });
+                setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, messages: parsedMsgs, files, loaded: true, loading: false } : c));
             } catch (e) {
                 setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, loading: false } : c));
             }
@@ -165,8 +270,15 @@ export default function App({ userData: externalUserData }) {
         setToast({ show: true, message, type, action });
     };
 
+    // Append messages, but deduplicate by id (prevents double user messages)
     const appendMessages = (chatId, newMsgs) => {
-        setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, ...newMsgs] } : c));
+        setChats(prev => prev.map(c => {
+            if (c.id !== chatId) return c;
+            // Deduplicate by id
+            const existingIds = new Set((c.messages || []).map(m => m.id));
+            const filteredNew = newMsgs.filter(m => !existingIds.has(m.id));
+            return { ...c, messages: [...(c.messages || []), ...filteredNew] };
+        }));
     };
 
     const handleUploadFile = async (file, chatId, silent=false) => {
@@ -180,7 +292,16 @@ export default function App({ userData: externalUserData }) {
         }
     };
 
+    // Create a new chat, but only if there isn't already a new/empty chat
     const handleNewChat = async (initialFileMessage = null) => {
+        // Prevent creating a new chat if there is already a new/empty chat (no messages, no files)
+        const hasEmptyChat = chats.some(c => (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
+        if (hasEmptyChat) {
+            // Focus the empty chat
+            const emptyChat = chats.find(c => (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
+            if (emptyChat) setActiveChatId(emptyChat.id);
+            return;
+        }
         try {
             const backendChat = await chatApi.createChat('New Conversation');
             const newChatId = backendChat.id;
@@ -191,7 +312,11 @@ export default function App({ userData: externalUserData }) {
                 newChat.messages.push({ id:`init-${Date.now()}`, sender:'user', file: initialFileMessage.file });
                 setShowDashboardHint(true);
             }
-            setChats(prevChats => [newChat, ...prevChats]);
+            setChats(prevChats => {
+                // Deduplicate by id
+                const allChats = [newChat, ...prevChats];
+                return Array.from(new Map(allChats.map(c => [c.id, c])).values());
+            });
             setActiveChatId(newChatId);
             if(isMobile) setIsSidebarOpen(false);
         } catch (e) {
@@ -201,12 +326,30 @@ export default function App({ userData: externalUserData }) {
     };
 
     const handleSendMessage = async (text, file = null, { autoAI = true } = {}) => {
-        if ((!text || !text.trim()) && !file) return;
+    if (isBotReplying || isSendingMessage) return;
+    if ((!text || !text.trim()) && !file) return;
+    setIsSendingMessage(true);
         let chatId = activeChatId;
+        // If no chat is active, create a new chat and use its id
         if (!chatId) {
             await handleNewChat();
-            chatId = activeChatId;
+            // Wait for chat to be created and set as active
+            // Use a MutationObserver or polling to get the new chatId
+            // For now, just return and let the user try again
+            return;
         }
+        // If the current chat is a new/empty chat and the user switches to another chat before sending a message, remove the empty chat
+        setChats(prevChats => {
+            // If the active chat is empty and not the current chat, remove it
+            if (prevChats.length > 1) {
+                const emptyChats = prevChats.filter(c => (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
+                if (emptyChats.length > 0) {
+                    // Remove all empty chats except the current one
+                    return prevChats.filter(c => !(emptyChats.some(ec => ec.id === c.id) && c.id !== chatId));
+                }
+            }
+            return prevChats;
+        });
         try {
             let fileMsg = null;
             if (file) {
@@ -218,15 +361,21 @@ export default function App({ userData: externalUserData }) {
                 }
             }
             if (text && text.trim()) {
+                // Only append after backend returns (no optimistic add)
                 const msg = await chatApi.addMessage(chatId, text.trim(), 'user');
                 appendMessages(chatId, [msg]);
                 if (autoAI) {
-                    triggerAIResponse(chatId, text.trim());
+                    setIsBotReplying(true);
+                    await triggerAIResponse(chatId, text.trim());
+                    setIsBotReplying(false);
                 }
             }
         } catch(e){
+            setIsBotReplying(false);
             console.error('Send failed', e);
             showToast('Failed to send','error');
+        } finally {
+            setIsSendingMessage(false);
         }
     };
 
@@ -248,11 +397,20 @@ export default function App({ userData: externalUserData }) {
             // Replace typing with answer first
             let botMessageId = `bot-${Date.now()}`;
             setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: c.messages.map(m => m.id === typingId ? { id: botMessageId, sender:'bot', text: res.answer } : m) } : c));
-            // If SQL present, run table query automatically
+            // If SQL present, run table query automatically and persist as a bot message
             if (res.sql && res.sql.trim()) {
                 const sql = res.sql.trim();
                 try {
                     const tableRes = await tableQueryApi.run({ sql, file_ids: fileIds });
+                    // Save table result as a bot message in the backend
+                    const tableMsgText = "__TABLE__:" + JSON.stringify({
+                        sql,
+                        columns: tableRes.columns || [],
+                        rows: tableRes.rows || [],
+                        fileIds,
+                    });
+                    await chatApi.addMessage(chatId, tableMsgText, "bot");
+                    // Also append to local state for immediate UI update
                     const tableMsg = {
                         id: `table-${Date.now()}`,
                         sender: 'bot',
@@ -261,7 +419,7 @@ export default function App({ userData: externalUserData }) {
                             columns: tableRes.columns || [],
                             rows: tableRes.rows || [],
                             fileIds,
-                            view: 'table', // or 'sql'
+                            view: 'table',
                             editingSql: sql,
                             running: false,
                             error: null
@@ -288,33 +446,60 @@ export default function App({ userData: externalUserData }) {
         });
     };
 
-    const handleDeleteChat = (chatId) => {
-        const remainingChats = chats.filter(chat => chat.id !== chatId);
-        setChats(remainingChats);
-        if (activeChatId === chatId) {
-            const newActiveId = remainingChats.length > 0 ? remainingChats[0].id : null;
-            setActiveChatId(newActiveId);
-            if (remainingChats.length === 0) {
-                handleNewChat();
+    const handleDeleteChat = async (chatId) => {
+        try {
+            await chatApi.softDeleteChat(chatId);
+            let remainingChats = chats.filter(chat => chat.id !== chatId);
+            // Remove any empty chats (no messages, no files)
+            remainingChats = remainingChats.filter(c => (c.messages?.length > 0 || c.files?.length > 0));
+            setChats(remainingChats);
+            if (activeChatId === chatId) {
+                const newActiveId = remainingChats.length > 0 ? remainingChats[0].id : null;
+                setActiveChatId(newActiveId);
+                if (remainingChats.length === 0) {
+                    handleNewChat();
+                }
             }
+            // Refetch deleted chats for recycle bin
+            try {
+                const deleted = await chatApi.listDeletedChats();
+                setDeletedChats(deleted);
+            } catch {}
+            showToast("Chat deleted.", "success");
+        } catch {
+            showToast("Failed to delete chat.", "error");
         }
-        showToast("Chat deleted.", "success");
     };
 
+    // Request confirmation for deleting all chats
     const requestDeleteHistory = () => {
         setConfirmationProps({
             isOpen: true,
-            title: 'Delete All Chats?',
-            message: 'Are you sure you want to permanently delete your entire chat history? This action cannot be undone.',
+            title: 'Delete All Chats',
+            message: 'Are you sure you want to delete all your chats? This will move all chats to the recycle bin.',
             onConfirm: handleDeleteHistory
         });
     };
 
-    const handleDeleteHistory = () => {
-        setChats([]);
-        setActiveChatId(null);
-        handleNewChat();
-        showToast("All chats have been deleted.", "success");
+    // Soft delete all chats for the user
+    const handleDeleteHistory = async () => {
+        setConfirmationProps(prev => ({ ...prev, isOpen: false }));
+        try {
+            // Call soft delete for all chats in parallel
+            await Promise.all(
+                chats.map(chat => chatApi.softDeleteChat(chat.id))
+            );
+            // Refetch deleted chats for recycle bin
+            try {
+                const deleted = await chatApi.listDeletedChats();
+                setDeletedChats(deleted);
+            } catch {}
+            setChats([]);
+            setActiveChatId(null);
+            showToast('All chats moved to recycle bin', 'success');
+        } catch (e) {
+            showToast('Failed to delete all chats', 'error');
+        }
     };
 
     const handleLogout = () => {
@@ -323,6 +508,9 @@ export default function App({ userData: externalUserData }) {
         setActiveChatId(null);
         handleNewChat();
         showToast("You have been logged out.", "success");
+        setTimeout(() => {
+            window.location.href = '/';
+        }, 500);
     };
 
     const requestLogout = () => {
@@ -355,14 +543,18 @@ export default function App({ userData: externalUserData }) {
             raw: file
         };
 
-        const initialMessage = {
-            id: `msg-${Date.now()}`,
-            sender: 'user',
-            file: fileData,
-        };
+        // If there is an active chat, upload to it. Otherwise, create a new chat with the file.
+        if (activeChatId) {
+            handleUploadFile(file, activeChatId);
+        } else {
+            const initialMessage = {
+                id: `msg-${Date.now()}`,
+                sender: 'user',
+                file: fileData,
+            };
+            handleNewChat(initialMessage);
+        }
 
-        handleNewChat(initialMessage);
-        
         // Reset file input value to allow re-uploading the same file
         if(fileInputRef.current) {
             fileInputRef.current.value = "";
@@ -451,7 +643,11 @@ export default function App({ userData: externalUserData }) {
             let messages = [];
             try { messages = await chatApi.getMessages(chat.id); } catch {}
             const merged = { ...chat, messages, files: [], loaded:true };
-            setChats(prev => [merged, ...prev.filter(c => c.id !== chat.id)]);
+            setChats(prev => {
+                // Deduplicate by id
+                const allChats = [merged, ...prev];
+                return Array.from(new Map(allChats.map(c => [c.id, c])).values());
+            });
             setActiveChatId(chat.id);
             setViewCode('');
             showToast('Shared chat loaded','success');
@@ -482,6 +678,7 @@ export default function App({ userData: externalUserData }) {
                             onShareCode={handleShareCode}
                             onClearHistory={requestDeleteHistory}
                             onLogout={requestLogout}
+                            setShowRecycleBin={setShowRecycleBin}
                         />
                     </motion.aside>
                 )}
@@ -562,13 +759,14 @@ export default function App({ userData: externalUserData }) {
                 </header>
 
                 <ChatPanel messages={activeChat?.messages || []} onPreviewFile={(file) => setShowFilePreview(file)} onDeleteFile={handleDeleteFileMessage} activeChatId={activeChatId} userData={userData} />
-                <ChatInput onSendMessage={handleSendMessage} onUploadClick={() => fileInputRef.current?.click()} />
+                <ChatInput onSendMessage={handleSendMessage} onUploadClick={() => fileInputRef.current?.click()} isBotReplying={isBotReplying} isSendingMessage={isSendingMessage} />
             </main>
 
             <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx,.csv" className="hidden" />
 
             <AnimatePresence>
                 {showAccountModal && <AccountModal key="accountModal" userData={userData} onClose={() => setShowAccountModal(false)} onDeleteHistory={requestDeleteHistory} onShowPasswordChange={() => { setShowAccountModal(false); setShowPasswordModal(true); }} />}
+                {showRecycleBin && <RecycleBinModal key="recycleBinModal" onClose={() => setShowRecycleBin(false)} deletedChats={deletedChats} onRestoreChat={handleRestoreChat} onDeleteChat={handleDeleteChatPermanent} />}
                 {showPasswordModal && <PasswordChangeModal key="passwordModal" onClose={() => setShowPasswordModal(false)} showToast={showToast} />}
                 {showFileDashboard && <FileDashboardModal key="fileDashboardModal" chat={activeChat} onClose={() => setShowFileDashboard(false)} onConfirm={handleRequestDashboard} />}
                 {showContactModal && <ContactModal key="contactModal" onClose={() => setShowContactModal(false)} showToast={showToast} />}
@@ -648,6 +846,7 @@ const SettingsDropdown = ({ onAction }) => (
         className="absolute bottom-full left-0 mb-2 w-full bg-[#323232] border border-gray-700 rounded-lg shadow-xl z-50 p-2" >
         <ul>
             <SettingsItem icon={User} text="Manage Account" onClick={() => onAction('account')} />
+            <SettingsItem icon={Trash2} text="Recycle Bin" onClick={() => onAction('recyclebin')} />
             <SettingsItem icon={Clipboard} text="Share Code" onClick={() => onAction('share')} />
             <SettingsItem icon={LifeBuoy} text="Contact Support" onClick={() => onAction('contact')} />
             <SettingsItem icon={Trash2} text="Clear History" onClick={() => onAction('clear')} danger={true} />
@@ -657,7 +856,7 @@ const SettingsDropdown = ({ onAction }) => (
     </motion.div>
 );
 
-const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, viewCode, setViewCode, onViewSharedChat, onShowAccount, onShowContact, onShareCode, onClearHistory, onLogout }) => {
+const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, viewCode, setViewCode, onViewSharedChat, onShowAccount, onShowContact, onShareCode, onClearHistory, onLogout, setShowRecycleBin }) => {
     const [showSettings, setShowSettings] = useState(false);
     const [animatingButton, setAnimatingButton] = useState(null);
     const settingsRef = useRef(null);
@@ -720,6 +919,7 @@ const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat
                         if (action === 'share') onShareCode();
                         if (action === 'clear') onClearHistory();
                         if (action === 'logout') onLogout();
+                        if (action === 'recyclebin') setShowRecycleBin(true);
                         setShowSettings(false);
                     }} />}
                 </AnimatePresence>
@@ -907,11 +1107,16 @@ const FileCard = ({ file, onPreview, onDelete }) => (
     </motion.div>
 );
 
-const ChatInput = ({ onSendMessage, onUploadClick }) => {
+const ChatInput = ({ onSendMessage, onUploadClick, isBotReplying, isSendingMessage }) => {
     const [input, setInput] = useState('');
     const textareaRef = useRef(null);
 
-    const handleSubmit = (e) => { e.preventDefault(); if (input.trim()) { onSendMessage(input.trim()); setInput(''); } };
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!input.trim() || isBotReplying || isSendingMessage) return;
+        onSendMessage(input.trim());
+        setInput('');
+    };
     const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e); } }
 
     useEffect(() => {
@@ -925,9 +1130,24 @@ const ChatInput = ({ onSendMessage, onUploadClick }) => {
     return (
         <div className="p-4 bg-transparent">
             <form onSubmit={handleSubmit} className="flex items-center gap-3 bg-[#323232] rounded-xl p-2.5 shadow-2xl border border-gray-700/50 focus-within:ring-2 focus-within:ring-[#14FFEC] transition-all duration-300">
-                <button type="button" onClick={onUploadClick} className="p-2 rounded-full hover:bg-gray-600/50 transition-colors"><Plus className="w-6 h-6 text-gray-300" /></button>
-                <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Ask Vizora..." rows="1" className="flex-1 bg-transparent text-gray-200 text-base placeholder-gray-500 focus:outline-none resize-none max-h-40 custom-scrollbar" />
-                <button type="submit" className="p-2 rounded-full hover:bg-gray-600/50 transition-colors disabled:opacity-50" disabled={!input.trim()}><ArrowRight className="w-6 h-6 text-gray-300" /></button>
+                <button type="button" onClick={onUploadClick} className="p-2 rounded-full hover:bg-gray-600/50 transition-colors" disabled={isBotReplying || isSendingMessage}><Plus className="w-6 h-6 text-gray-300" /></button>
+                <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask Vizora..."
+                    rows="1"
+                    className="flex-1 bg-transparent text-gray-200 text-base placeholder-gray-500 focus:outline-none resize-none max-h-40 custom-scrollbar"
+                    disabled={isSendingMessage}
+                />
+                <button
+                    type="submit"
+                    className="p-2 rounded-full hover:bg-gray-600/50 transition-colors disabled:opacity-50"
+                    disabled={!input.trim() || isBotReplying || isSendingMessage}
+                >
+                    <ArrowRight className="w-6 h-6 text-gray-300" />
+                </button>
             </form>
         </div>
     );

@@ -109,10 +109,99 @@ def ask_ai(question, metadata=None):
             response = model.generate_content(prompt)
             text = response.text
 
-            # Extract SQL code block if present
+            # Always extract SQL code block if present, regardless of question wording
             sql_match = re.search(r"```sql\s*(.*?)```", text, re.DOTALL)
             sql = sql_match.group(1).strip() if sql_match else None
 
+            # Always remove SQL code block from the answer text
+            text = re.sub(r"```sql.*?```", "", text, flags=re.DOTALL).strip()
+
+            # If SQL is present and the answer is empty or just repeats the question, provide a professional description
+            if sql:
+                blank_or_unhelpful = not text or text.strip().lower() in [
+                    question.strip().lower(),
+                    "here is the sql query to join the two tables and display the combined data.",
+                    "of course.",
+                    "",
+                ]
+                if blank_or_unhelpful:
+                    sql_lower = sql.lower()
+                    # Try to extract filter from WHERE clause
+                    where_match = re.search(
+                        r"where (.+?)(?: group by| order by| limit|$)",
+                        sql_lower,
+                        re.IGNORECASE,
+                    )
+                    filter_desc = None
+                    if where_match:
+                        filter_text = where_match.group(1).strip()
+                        # Try to make a human-friendly filter description
+                        if "like" in filter_text:
+                            # e.g., Name LIKE 'R%'
+                            col, val = re.findall(
+                                r"(\w+) like '([^']+)'", filter_text, re.IGNORECASE
+                            )[0]
+                            filter_desc = (
+                                f"{col} starting with '{val.rstrip('%')}" + "'"
+                            )
+                        elif "=" in filter_text:
+                            # e.g., Age = 20
+                            col, val = [s.strip() for s in filter_text.split("=", 1)]
+                            filter_desc = f"{col} equal to {val}"
+                        else:
+                            filter_desc = filter_text
+                    if "join" in sql_lower:
+                        if filter_desc:
+                            text = f"This table combines columns from both tables based on the join and filters for {filter_desc}."
+                        else:
+                            text = "This table combines the relevant columns from both tables based on the Student_ID, so you can see student details alongside their enrollments."
+                    elif "union" in sql_lower:
+                        text = "This table lists all unique student IDs found in both tables."
+                    elif "select" in sql_lower and "from" in sql_lower:
+                        if filter_desc:
+                            text = f"This table displays the selected columns where {filter_desc}."
+                        else:
+                            text = "This table displays the selected columns from your data as requested."
+                    else:
+                        text = "Here is the result based on your request."
+
+            # Final fallback: if answer is still blank, provide a generic but professional description
+            if (not text or not text.strip()) and sql:
+                sql_lower = sql.lower()
+                where_match = re.search(
+                    r"where (.+?)(?: group by| order by| limit|$)",
+                    sql_lower,
+                    re.IGNORECASE,
+                )
+                filter_desc = None
+                if where_match:
+                    filter_text = where_match.group(1).strip()
+                    if "like" in filter_text:
+                        col, val = re.findall(
+                            r"(\w+) like '([^']+)'", filter_text, re.IGNORECASE
+                        )[0]
+                        filter_desc = f"{col} starting with '{val.rstrip('%')}" + "'"
+                    elif "=" in filter_text:
+                        col, val = [s.strip() for s in filter_text.split("=", 1)]
+                        filter_desc = f"{col} equal to {val}"
+                    else:
+                        filter_desc = filter_text
+                if "join" in sql_lower:
+                    if filter_desc:
+                        text = f"This table shows the combined data from both tables, joined on the relevant columns and filtered for {filter_desc}."
+                    else:
+                        text = "This table shows the combined data from both tables, joined on the relevant columns."
+                elif "union" in sql_lower:
+                    text = "This table lists all unique values from both tables."
+                elif "select" in sql_lower and "from" in sql_lower:
+                    if filter_desc:
+                        text = f"This table displays the selected columns where {filter_desc}."
+                    else:
+                        text = (
+                            "This table displays the selected columns from your data."
+                        )
+                else:
+                    text = "Here is the result based on your request."
             return {"answer": text, "sql": sql}
         except Exception as e:
             last_exception = e

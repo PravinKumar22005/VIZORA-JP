@@ -1,4 +1,4 @@
-import axios from 'axios';
+  import axios from 'axios';
 const API_URL = 'http://localhost:8000';
 
 export const chatApi = {
@@ -13,10 +13,29 @@ export const chatApi = {
     return response.data;
   },
 
+  // Permanently delete a chat by ID (Recycle Bin)
+  deleteChat: async (chatId) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.delete(`${API_URL}/chats/${chatId}/permanent`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+
+
   // List all chats for the user
   listChats: async () => {
     const token = localStorage.getItem('token');
     const response = await axios.get(`${API_URL}/chats`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+
+  // List deleted chats for the user (for recycle bin)
+  listDeletedChats: async () => {
+    const token = localStorage.getItem('token');
+    const response = await axios.get(`${API_URL}/chats/deleted`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     return response.data;
@@ -63,5 +82,27 @@ export const chatApi = {
       headers: { Authorization: `Bearer ${token}` }
     });
     return response.data;
+  },
+
+  // Soft delete a chat by ID (set is_active=0)
+  softDeleteChat: async (chatId) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.patch(
+      `${API_URL}/chats/${chatId}`,
+      { is_active: 0 },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return response.data;
+  },
+
+  // Restore a chat by ID (set is_active=1)
+  restoreChat: async (chatId) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.patch(
+      `${API_URL}/chats/${chatId}`,
+      { is_active: 1 },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return response.data;
   }
-};
+}
