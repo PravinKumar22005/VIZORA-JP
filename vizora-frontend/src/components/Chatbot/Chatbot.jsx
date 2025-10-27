@@ -1,6 +1,6 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { chatApi } from '../../services/chatApi';
+import { analyzeChatTitle } from '../../utils/gemini';
 import { shareChat as shareChatApi, getSharedChat as getSharedChatApi } from '../../services/sharingApi';
 import { aiApi } from '../../services/aiApi';
 import { tableQueryApi } from '../../services/tableQueryApi';
@@ -72,6 +72,11 @@ export default function App({ userData: externalUserData }) {
     const handleRestoreChat = async (chatId) => {
         try {
             await chatApi.restoreChat(chatId);
+            // Always refresh chat list from backend after restore
+            const remoteChats = await chatApi.listChats();
+            const enriched = remoteChats.map(c => ({ ...c, messages: [], files: [], loaded: false }));
+            const deduped = Array.from(new Map(enriched.map(c => [c.id, c])).values());
+            setChats(deduped);
             // Refetch deleted chats after restore
             const deleted = await chatApi.listDeletedChats();
             setDeletedChats(deleted);
@@ -83,12 +88,27 @@ export default function App({ userData: externalUserData }) {
     const handleDeleteChatPermanent = async (chatId) => {
         try {
             await chatApi.deleteChat(chatId);
-            // Refetch deleted chats after permanent delete
-            const deleted = await chatApi.listDeletedChats();
-            setDeletedChats(deleted);
-            showToast('Chat permanently deleted', 'success');
+            // Always refresh chat list from backend after delete
+            const remoteChats = await chatApi.listChats();
+            const enriched = remoteChats.map(c => ({ ...c, messages: [], files: [], loaded: false }));
+            const deduped = Array.from(new Map(enriched.map(c => [c.id, c])).values());
+            setChats(deduped);
+            // If the deleted chat was active, clear activeChatId
+            if (activeChatId === chatId) {
+                const newActiveId = deduped.length > 0 ? deduped[0].id : null;
+                setActiveChatId(newActiveId);
+                if (deduped.length === 0) {
+                    handleNewChat();
+                }
+            }
+            // Refetch deleted chats for recycle bin
+            try {
+                const deleted = await chatApi.listDeletedChats();
+                setDeletedChats(deleted);
+            } catch {}
+            showToast("Chat deleted.", "success");
         } catch {
-            showToast('Failed to permanently delete chat', 'error');
+            showToast("Failed to delete chat.", "error");
         }
     };
     // Prevent sending new message while bot is replying
@@ -126,6 +146,11 @@ export default function App({ userData: externalUserData }) {
     // --- Refs ---
     const fileInputRef = useRef(null);
     const titleInputRef = useRef(null);
+    const latestChatsRef = useRef([]);
+
+    useEffect(() => {
+        latestChatsRef.current = chats;
+    }, [chats]);
 
     // --- Effects ---
     // Handle responsive sidebar
@@ -294,18 +319,21 @@ export default function App({ userData: externalUserData }) {
 
     // Create a new chat, but only if there isn't already a new/empty chat
     const handleNewChat = async (initialFileMessage = null) => {
-        // Prevent creating a new chat if there is already a new/empty chat (no messages, no files)
-        const hasEmptyChat = chats.some(c => (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
+        // Only block if a visible chat (not deleted) is empty (no messages, no files, and no title)
+        const visibleChats = chats.filter(chat => !chat.deleted);
+        const hasEmptyChat = visibleChats.some(chat =>
+            (!chat.messages || chat.messages.length === 0) &&
+            (!chat.files || chat.files.length === 0) &&
+            (!chat.title || chat.title.trim() === '' || chat.title === 'New Conversation')
+        );
         if (hasEmptyChat) {
-            // Focus the empty chat
-            const emptyChat = chats.find(c => (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
-            if (emptyChat) setActiveChatId(emptyChat.id);
+            showToast('Finish or delete the empty chat before creating a new one.', 'error');
             return;
         }
         try {
             const backendChat = await chatApi.createChat('New Conversation');
             const newChatId = backendChat.id;
-            const newChat = { ...backendChat, messages: [], files: [], loaded: true };
+            const newChat = { ...backendChat, messages: [], files: [], loaded: true, _lastTitleMsgIds: [] };
             // If initial file message provided, upload file
             if (initialFileMessage && initialFileMessage.file) {
                 await handleUploadFile(initialFileMessage.file.raw || initialFileMessage.file, newChatId, true);
@@ -325,26 +353,37 @@ export default function App({ userData: externalUserData }) {
         }
     };
 
+    // --- Automatic Chat Title Update ---
+    // Helper to determine if title should be updated
+    const shouldUpdateTitle = (chat, lastMsgs) => {
+        // Don't update if user is editing title
+        if (isEditingTitle) return false;
+        // Don't update if user has manually set a custom title
+        const defaultTitles = ['New Conversation', 'Untitled', '', null, undefined, 'Conversation', 'Analyzing title...'];
+        if (!defaultTitles.includes(chat.title)) return false;
+        // Only update if last N message IDs are different from last used for title
+        const lastMsgIds = lastMsgs.map(m => m.id);
+        if (JSON.stringify(chat._lastTitleMsgIds || []) === JSON.stringify(lastMsgIds)) return false;
+        // Only update if there are enough messages
+        if (lastMsgs.length < 4) return false;
+        return true;
+    };
+
     const handleSendMessage = async (text, file = null, { autoAI = true } = {}) => {
-    if (isBotReplying || isSendingMessage) return;
-    if ((!text || !text.trim()) && !file) return;
-    setIsSendingMessage(true);
+        if (isBotReplying || isSendingMessage) return;
+        if ((!text || !text.trim()) && !file) return;
+        setIsSendingMessage(true);
         let chatId = activeChatId;
-        // If no chat is active, create a new chat and use its id
         if (!chatId) {
             await handleNewChat();
-            // Wait for chat to be created and set as active
-            // Use a MutationObserver or polling to get the new chatId
-            // For now, just return and let the user try again
             return;
         }
-        // If the current chat is a new/empty chat and the user switches to another chat before sending a message, remove the empty chat
+        // Remove only truly-local empty chats (loaded === true and empty) to avoid dropping chats
+        // that haven't been hydrated from the server yet. Use functional update to avoid stale state.
         setChats(prevChats => {
-            // If the active chat is empty and not the current chat, remove it
             if (prevChats.length > 1) {
-                const emptyChats = prevChats.filter(c => (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
+                const emptyChats = prevChats.filter(c => c.loaded && (c.messages?.length === 0 || !c.messages) && (c.files?.length === 0 || !c.files));
                 if (emptyChats.length > 0) {
-                    // Remove all empty chats except the current one
                     return prevChats.filter(c => !(emptyChats.some(ec => ec.id === c.id) && c.id !== chatId));
                 }
             }
@@ -360,14 +399,37 @@ export default function App({ userData: externalUserData }) {
                     appendMessages(chatId, [fileMsg]);
                 }
             }
+            let newMsg = null;
             if (text && text.trim()) {
-                // Only append after backend returns (no optimistic add)
                 const msg = await chatApi.addMessage(chatId, text.trim(), 'user');
                 appendMessages(chatId, [msg]);
+                newMsg = msg;
                 if (autoAI) {
                     setIsBotReplying(true);
-                    await triggerAIResponse(chatId, text.trim());
+                    // Build a local snapshot of messages including the newly appended user/file messages.
+                    // Use latestChatsRef to avoid stale `chats` closure inside async flows.
+                    const chatSnapshot = (latestChatsRef.current || []).find(c => c.id === chatId) || { messages: [] };
+                    const messagesSnapshot = [...(chatSnapshot.messages || []), ...(fileMsg ? [fileMsg] : []), ...(newMsg ? [newMsg] : [])];
+                    await triggerAIResponse(chatId, text.trim(), messagesSnapshot);
                     setIsBotReplying(false);
+                }
+            }
+            // --- Automatic Gemini Chat Title Update ---
+            const chat = (latestChatsRef.current || []).find(c => c.id === chatId);
+            if (chat) {
+                // Gather up to 10 most recent user+bot messages (ignore system/typing)
+                const allMsgs = [...(chat.messages || []), ...(newMsg ? [newMsg] : []), ...(fileMsg ? [fileMsg] : [])];
+                const filteredMsgs = allMsgs.filter(m => m && m.sender && ['user','bot','assistant'].includes(m.sender));
+                const lastMsgs = filteredMsgs.slice(-10);
+                if (shouldUpdateTitle(chat, lastMsgs)) {
+                    setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: 'Analyzing title...' } : c));
+                    try {
+                        const geminiMsgs = lastMsgs.map(m => ({ sender: m.sender, text: m.text || '' }));
+                        const suggestedTitle = await analyzeChatTitle(geminiMsgs);
+                        setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: suggestedTitle || 'Conversation', _lastTitleMsgIds: lastMsgs.map(m => m.id) } : c));
+                    } catch (err) {
+                        setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: 'Conversation', _lastTitleMsgIds: lastMsgs.map(m => m.id) } : c));
+                    }
                 }
             }
         } catch(e){
@@ -379,14 +441,15 @@ export default function App({ userData: externalUserData }) {
         }
     };
 
-    const triggerAIResponse = async (chatId, question) => {
+    const triggerAIResponse = async (chatId, question, messagesSnapshot = null) => {
         // Show typing placeholder
         const typingId = `typing-${Date.now()}`;
         appendMessages(chatId, [{ id: typingId, sender: 'bot', typing: true }]);
         try {
             // Collect file_ids for this chat (metadata already stored after upload)
-            const chat = chats.find(c => c.id === chatId);
-            let fileIds = (chat?.files || []).map(f => f.id);
+            // Use the latest chats ref to avoid stale reads
+            const chat = (latestChatsRef.current || []).find(c => c.id === chatId);
+            let fileIds = (chat?.files || []).map(f => f.id) || [];
             if (selectedAIFileIds.length > 0) {
                 // Only use user-selected subset (ensure they belong to this chat)
                 fileIds = fileIds.filter(id => selectedAIFileIds.includes(id));
@@ -394,9 +457,38 @@ export default function App({ userData: externalUserData }) {
             const payload = { question, chat_id: chatId };
             if (fileIds.length > 0) payload.file_ids = fileIds;
             const res = await aiApi.ask(payload); // expects { answer: string, sql?: string }
-            // Replace typing with answer first
+            // Replace typing with answer first and compute messagesAfterBot locally
             let botMessageId = `bot-${Date.now()}`;
-            setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: c.messages.map(m => m.id === typingId ? { id: botMessageId, sender:'bot', text: res.answer } : m) } : c));
+            const baseMsgs = messagesSnapshot || chat?.messages || [];
+            // Build messages as they should be after replacing typing placeholder
+            let messagesAfterBot = (baseMsgs || []).map(m => m.id === typingId ? { id: botMessageId, sender: 'bot', text: res.answer } : m);
+            // If typing placeholder wasn't present in baseMsgs, append the bot message
+            if (!messagesAfterBot.some(m => m.id === botMessageId)) {
+                messagesAfterBot = [...messagesAfterBot, { id: botMessageId, sender: 'bot', text: res.answer }];
+            }
+            // Update chat messages in state
+            setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: messagesAfterBot } : c));
+
+            // --- Automatic Gemini Chat Title Update after AI response ---
+            try {
+                const filteredMsgs = (messagesAfterBot || []).filter(m => m && m.sender && ['user','bot','assistant'].includes(m.sender));
+                const lastMsgs = filteredMsgs.slice(-10);
+                const chatForTitle = chat || { title: null, _lastTitleMsgIds: [] };
+                if (shouldUpdateTitle(chatForTitle, lastMsgs)) {
+                    setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: 'Analyzing title...' } : c));
+                    const geminiMsgs = lastMsgs.map(m => ({ sender: m.sender, text: m.text || '' }));
+                    try {
+                        const suggestedTitle = await analyzeChatTitle(geminiMsgs);
+                        setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: suggestedTitle || 'Conversation', _lastTitleMsgIds: lastMsgs.map(m => m.id) } : c));
+                    } catch (err) {
+                        setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: 'Conversation', _lastTitleMsgIds: lastMsgs.map(m => m.id) } : c));
+                        showToast('AI title update failed','error');
+                    }
+                }
+            } catch (err) {
+                // swallow errors from title logic to avoid breaking AI response flow
+                console.error('Title update check failed', err);
+            }
             // If SQL present, run table query automatically and persist as a bot message
             if (res.sql && res.sql.trim()) {
                 const sql = res.sql.trim();
@@ -449,14 +541,16 @@ export default function App({ userData: externalUserData }) {
     const handleDeleteChat = async (chatId) => {
         try {
             await chatApi.softDeleteChat(chatId);
-            let remainingChats = chats.filter(chat => chat.id !== chatId);
-            // Remove any empty chats (no messages, no files)
-            remainingChats = remainingChats.filter(c => (c.messages?.length > 0 || c.files?.length > 0));
-            setChats(remainingChats);
+            // Always refresh chat list from backend after delete
+            const remoteChats = await chatApi.listChats();
+            const enriched = remoteChats.map(c => ({ ...c, messages: [], files: [], loaded: false }));
+            const deduped = Array.from(new Map(enriched.map(c => [c.id, c])).values());
+            setChats(deduped);
+            // If the deleted chat was active, clear activeChatId
             if (activeChatId === chatId) {
-                const newActiveId = remainingChats.length > 0 ? remainingChats[0].id : null;
+                const newActiveId = deduped.length > 0 ? deduped[0].id : null;
                 setActiveChatId(newActiveId);
-                if (remainingChats.length === 0) {
+                if (deduped.length === 0) {
                     handleNewChat();
                 }
             }
@@ -562,25 +656,23 @@ export default function App({ userData: externalUserData }) {
     };
     
     const handleDeleteFileMessage = (chatId, messageId) => {
-        const chatToUpdate = chats.find(c => c.id === chatId);
-        if (!chatToUpdate) return;
-    
-        const originalChatState = JSON.parse(JSON.stringify(chatToUpdate)); // Deep copy for undo
-        
-        const newMessages = chatToUpdate.messages.filter(m => m.id !== messageId);
-        
-        setChats(chats.map(c => c.id === chatId ? { ...c, messages: newMessages } : c));
-        setLastDeletedFile(originalChatState);
-    
-        showToast("File removed.", "success", {
-            label: "Undo",
-            onClick: handleUndoDeleteFile
+        setChats(prevChats => {
+            const chatToUpdate = prevChats.find(c => c.id === chatId);
+            if (!chatToUpdate) return prevChats;
+            const originalChatState = JSON.parse(JSON.stringify(chatToUpdate)); // Deep copy for undo
+            const newMessages = (chatToUpdate.messages || []).filter(m => m.id !== messageId);
+            setLastDeletedFile(originalChatState);
+            showToast("File removed.", "success", {
+                label: "Undo",
+                onClick: handleUndoDeleteFile
+            });
+            return prevChats.map(c => c.id === chatId ? { ...c, messages: newMessages } : c);
         });
     };
 
     const handleUndoDeleteFile = () => {
         if (lastDeletedFile) {
-            setChats(chats.map(chat => chat.id === lastDeletedFile.id ? lastDeletedFile : chat));
+            setChats(prev => prev.map(chat => chat.id === lastDeletedFile.id ? lastDeletedFile : chat));
             setLastDeletedFile(null);
             showToast("File restored", "success");
         }
@@ -597,7 +689,7 @@ export default function App({ userData: externalUserData }) {
             setIsEditingTitle(false);
             return;
         }
-        setChats(chats.map(chat =>
+        setChats(prev => prev.map(chat =>
             chat.id === activeChatId ? { ...chat, title: editingTitle.trim() } : chat
         ));
         setIsEditingTitle(false);
@@ -615,9 +707,9 @@ export default function App({ userData: externalUserData }) {
     };
     
     const handleRequestDashboard = async (fileMsgId) => {
-        const chat = chats.find(c => c.id === activeChatId);
-        if (!chat) return;
-        const fileEntry = chat.messages.find(m => m.id === fileMsgId && m.file);
+    const chat = (latestChatsRef.current || []).find(c => c.id === activeChatId);
+    if (!chat) return;
+    const fileEntry = (chat.messages || []).find(m => m.id === fileMsgId && m.file);
         if (!fileEntry) return showToast('File not found','error');
         try {
             // Use file metadata columns to build a minimal dashboard_json placeholder
@@ -874,8 +966,14 @@ const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat
     return (
     <div className="flex flex-col h-full p-3">
         <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2"> <div className="w-8 h-8 bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] rounded-lg"></div> <h1 className="text-2xl font-bold text-white">Vizora</h1> </div>
-             <button onClick={onToggleSidebar} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"> <ChevronsLeft className="w-5 h-5" /> </button>
+            <div className="flex items-center gap-2">
+                <div className="relative w-8 h-8">
+                    <div className="w-8 h-8 bg-black rounded-full"></div>
+                    <img src={require('../../assets/logo.gif')} alt="Vizora Logo" className="absolute inset-0 w-8 h-8 object-contain rounded-full" />
+                </div>
+                <h1 className="text-2xl font-bold text-white">Vizora</h1>
+            </div>
+            <button onClick={onToggleSidebar} className="p-1.5 rounded-md hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC]"> <ChevronsLeft className="w-5 h-5" /> </button>
         </div>
 
         <button onClick={onNewChat} className="group flex items-center justify-center gap-2 w-full bg-[#0D7377] text-white py-2.5 px-4 rounded-lg text-sm font-semibold hover:bg-[#14FFEC] hover:text-black transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#323232] focus:ring-[#14FFEC] mb-4"> <Plus className="w-5 h-5" /> New Chat </button>
@@ -963,7 +1061,11 @@ const ChatPanel = ({ messages, onPreviewFile, onDeleteFile, activeChatId, userDa
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
             {messages.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
-                    <div className="w-16 h-16 mb-4 bg-gradient-to-tr from-[#0D7377] to-[#14FFEC] rounded-2xl"></div>
+                    <div className="relative w-16 h-16 mb-4 flex items-center justify-center">
+                        <div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center p-2">
+                            <img src={require('../../assets/logo.jpg')} alt="Vizora Logo" className="w-full h-full object-contain rounded-2xl" />
+                        </div>
+                    </div>
                     <h2 className="text-2xl font-bold text-gray-300">Welcome to Vizora Chat</h2>
                     <p>Start a conversation or upload a file to begin.</p>
                 </div>
@@ -1232,7 +1334,7 @@ const FilePreviewModal = ({ file, onClose }) => {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={onClose}>
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} className="bg-[#212121] rounded-xl w-full max-w-4xl h-[90vh] flex flex-col border border-gray-700/50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <header className="p-4 flex items-center justify-between border-b border-gray-700/50 flex-shrink-0">
-                    <h2 className="text-xl font-bold text-white truncate">{file.name}</h2> <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
+                    <h2 className="text-xl font-bold mb-2 text-white truncate">{file.name}</h2> <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
                 </header>
                 <div className="p-4 flex-shrink-0 flex flex-col md:flex-row gap-4 items-center">
                     {workbook && (<select value={activeSheet} onChange={(e) => handleSheetChange(parseInt(e.target.value))} className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">{workbook.SheetNames.map((name, index) => (<option key={name} value={index}>{name}</option>))}</select>)}
@@ -1305,8 +1407,10 @@ const FileDashboardModal = ({ chat, onClose, onConfirm }) => {
                         </fieldset>
                     ) : ( <div className="text-center py-8 text-gray-500"><FileX2 className="w-10 h-10 mx-auto mb-2" /><p>No files have been uploaded in this chat.</p></div> )}
                 </div>
-                 <div className="mt-6 flex justify-end">
-                    <button onClick={() => { if(selectedFileId) onConfirm(selectedFileId)}} disabled={!selectedFileId} className="py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Done</button>
+                <div className="mt-6 flex justify-end">
+                    <button onClick={() => { if(selectedFileId) onConfirm(selectedFileId)}} disabled={!selectedFileId} className="py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors disabled:opacity-50">
+                        Confirm
+                    </button>
                 </div>
             </motion.div>
         </motion.div>
