@@ -206,5 +206,6 @@ def ask_ai(question, metadata=None):
         except Exception as e:
             last_exception = e
             continue
-    # If all keys fail, raise the last exception
-    raise RuntimeError(f"All Gemini API keys failed. Last error: {last_exception}")
+    # Graceful degradation: if all keys fail (e.g., quota exceeded), return a helpful fallback
+    fallback = "I’m currently unable to reach the Gemini API due to quota limits. I can still help: please describe the chart or table you want, and I’ll suggest a SQL query using your metadata."
+    return {"answer": fallback, "sql": None}

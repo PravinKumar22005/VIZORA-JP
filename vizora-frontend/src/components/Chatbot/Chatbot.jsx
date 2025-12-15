@@ -364,8 +364,10 @@ export default function App({ userData: externalUserData }) {
         // Only update if last N message IDs are different from last used for title
         const lastMsgIds = lastMsgs.map(m => m.id);
         if (JSON.stringify(chat._lastTitleMsgIds || []) === JSON.stringify(lastMsgIds)) return false;
-        // Only update if there are enough messages
-        if (lastMsgs.length < 4) return false;
+        // Only update if there are enough signals (messages or files)
+        const fileCount = (chat.files || []).length;
+        const signalCount = lastMsgs.length + fileCount;
+        if (signalCount < 2) return false;
         return true;
     };
 
