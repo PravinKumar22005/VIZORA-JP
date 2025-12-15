@@ -29,6 +29,10 @@ class ChatUpdate(BaseModel):
     is_active: int
 
 
+class ChatRename(BaseModel):
+    title: str
+
+
 @router.delete("/messages/permanent/{message_id}")
 def delete_message_permanently(
     message_id: int,
@@ -54,6 +58,15 @@ def update_chat_is_active(
     return chat_controller.update_chat_is_active(
         user.id, chat_id, chat_update.is_active
     )
+
+
+@router.patch("/chats/{chat_id}/title", response_model=dict)
+def rename_chat(
+    chat_id: int,
+    payload: ChatRename,
+    user: User = Depends(get_current_user),
+):
+    return chat_controller.update_chat(user.id, chat_id, title=payload.title)
 
 
 @router.post("/chats", response_model=dict)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import AuthPage from './Auth/AuthPage'; // Import the AuthPage modal
 import logo from '../assets/logo.jpg';
 // --- SVG Icons as React Components ---
@@ -18,6 +18,241 @@ const PlusIcon = () => (
 const CloseIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
 );
+
+const SEGMENTS = ['North America', 'EMEA', 'APAC'];
+const TIME_RANGES = [
+    { id: '7', label: 'Last 7 days' },
+    { id: '30', label: '30 days' },
+    { id: '90', label: '90 days' }
+];
+
+const METRIC_CONFIG = {
+    revenue: {
+        label: 'Pipeline Revenue',
+        unit: '$',
+        series: [
+            {
+                name: 'North America',
+                color: 'from-[#14FFEC] to-[#0D7377]',
+                values: { '7': 0.82, '30': 3.9, '90': 11.2 },
+                deltas: { '7': 6, '30': 12, '90': 19 }
+            },
+            {
+                name: 'EMEA',
+                color: 'from-[#7C4DFF] to-[#3E206D]',
+                values: { '7': 0.65, '30': 3.1, '90': 9.8 },
+                deltas: { '7': 4, '30': 9, '90': 15 }
+            },
+            {
+                name: 'APAC',
+                color: 'from-[#FF8A00] to-[#FF3CAC]',
+                values: { '7': 0.54, '30': 2.7, '90': 8.1 },
+                deltas: { '7': 3, '30': 7, '90': 11 }
+            }
+        ]
+    },
+    conversion: {
+        label: 'Conversion Rate',
+        unit: '%',
+        series: [
+            {
+                name: 'North America',
+                color: 'from-[#00F5A0] to-[#00D9F5]',
+                values: { '7': 3.4, '30': 3.9, '90': 4.2 },
+                deltas: { '7': 2, '30': 5, '90': 7 }
+            },
+            {
+                name: 'EMEA',
+                color: 'from-[#FCE38A] to-[#F38181]',
+                values: { '7': 3.1, '30': 3.4, '90': 3.7 },
+                deltas: { '7': 1, '30': 3, '90': 5 }
+            },
+            {
+                name: 'APAC',
+                color: 'from-[#F83600] to-[#F9D423]',
+                values: { '7': 2.8, '30': 3.2, '90': 3.5 },
+                deltas: { '7': -1, '30': 1, '90': 3 }
+            }
+        ]
+    },
+    retention: {
+        label: 'Customer Retention',
+        unit: '%',
+        series: [
+            {
+                name: 'North America',
+                color: 'from-[#4FACFE] to-[#00F2FE]',
+                values: { '7': 88, '30': 90, '90': 92 },
+                deltas: { '7': 1, '30': 2, '90': 4 }
+            },
+            {
+                name: 'EMEA',
+                color: 'from-[#43CBFF] to-[#9708CC]',
+                values: { '7': 84, '30': 86, '90': 88 },
+                deltas: { '7': 1, '30': 2, '90': 3 }
+            },
+            {
+                name: 'APAC',
+                color: 'from-[#EE0979] to-[#FF6A00]',
+                values: { '7': 79, '30': 82, '90': 85 },
+                deltas: { '7': -1, '30': 1, '90': 2 }
+            }
+        ]
+    }
+};
+
+const formatMetricValue = (unit, value = 0) => {
+    if (unit === '$') {
+        if (value >= 1) return `$${value.toFixed(1)}M`;
+        return `$${Math.round(value * 1000)}K`;
+    }
+    if (unit === '%') {
+        return `${value.toFixed(1)}%`;
+    }
+    return value.toLocaleString();
+};
+
+const DashboardPreview = () => {
+    const [activeMetric, setActiveMetric] = useState('revenue');
+    const [activeRange, setActiveRange] = useState('30');
+    const [activeSegment, setActiveSegment] = useState(SEGMENTS[0]);
+
+    const metric = METRIC_CONFIG[activeMetric];
+
+    const chartValues = useMemo(() => (
+        metric.series.map(series => ({
+            name: series.name,
+            value: series.values[activeRange] || 0,
+            color: series.color,
+            delta: series.deltas[activeRange] || 0
+        }))
+    ), [metric, activeRange]);
+
+    const maxValue = Math.max(...chartValues.map(item => item.value), 1);
+    const activeSeries = metric.series.find(series => series.name === activeSegment) || metric.series[0];
+
+    const leader = useMemo(() => (
+        chartValues.reduce((prev, curr) => (curr.value > prev.value ? curr : prev), chartValues[0])
+    ), [chartValues]);
+
+    const laggard = useMemo(() => (
+        chartValues.reduce((prev, curr) => (curr.value < prev.value ? curr : prev), chartValues[0])
+    ), [chartValues]);
+
+    const insightCopy = `${leader.name} is leading ${metric.label.toLowerCase()} at ${formatMetricValue(metric.unit, leader.value)}, while ${laggard.name} shows room to improve. An automated playbook recommends nudging ${laggard.name} with fresh enablement assets.`;
+
+    return (
+        <div className="bg-[#161616] border border-gray-800 rounded-2xl p-5 md:p-6 shadow-2xl shadow-black/40 h-full flex flex-col">
+            <div className="flex items-center justify-between">
+                <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-gray-500">Live workspace</p>
+                    <h3 className="text-2xl font-bold text-white">Vizora Interactive Dashboard</h3>
+                </div>
+                <span className="text-xs font-semibold text-[#14FFEC] bg-[#14FFEC]/10 border border-[#14FFEC]/40 px-3 py-1 rounded-full">Realtime demo</span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap gap-2">
+                    {Object.entries(METRIC_CONFIG).map(([key, config]) => (
+                        <button
+                            key={key}
+                            onClick={() => setActiveMetric(key)}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeMetric === key ? 'bg-[#14FFEC] text-black shadow-lg shadow-[#14FFEC]/40' : 'bg-[#1f1f1f] text-gray-300 hover:bg-[#2c2c2c]'}`}
+                        >
+                            {config.label}
+                        </button>
+                    ))}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                        {TIME_RANGES.map(range => (
+                            <button
+                                key={range.id}
+                                onClick={() => setActiveRange(range.id)}
+                                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${activeRange === range.id ? 'bg-white text-black' : 'bg-[#202020] text-gray-300 hover:bg-[#2d2d2d]'}`}
+                            >
+                                {range.label}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {SEGMENTS.map(segment => (
+                            <button
+                                key={segment}
+                                onClick={() => setActiveSegment(segment)}
+                                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${activeSegment === segment ? 'border border-[#14FFEC] text-white' : 'border border-transparent text-gray-400 hover:text-white'}`}
+                            >
+                                {segment}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            <div className="mt-4 space-y-4 flex-1 flex flex-col">
+                <div className="bg-[#101010] border border-gray-800 rounded-xl p-4 flex-shrink-0">
+                    <div className="flex items-center justify-between text-sm">
+                        <div className="text-gray-400">{metric.label}</div>
+                        <div className={`${(activeSeries.deltas[activeRange] || 0) >= 0 ? 'text-emerald-300' : 'text-red-300'} font-semibold`}>
+                            {(activeSeries.deltas[activeRange] || 0) >= 0 ? '+' : ''}{activeSeries.deltas[activeRange] || 0}% vs prior
+                        </div>
+                    </div>
+                    <div className="flex items-end justify-between gap-2 h-32 mt-4">
+                        {chartValues.map(item => (
+                            <div key={item.name} className="flex flex-col items-center flex-1">
+                                <div className="h-full flex items-end w-full">
+                                    <div
+                                        className={`w-full bg-gradient-to-t ${item.color} rounded-t-lg transition-all duration-500 ${item.name === activeSegment ? 'ring-2 ring-[#14FFEC]/80 ring-offset-2 ring-offset-[#101010]' : ''}`}
+                                        style={{ height: `${(item.value / maxValue) * 100}%` }}
+                                        aria-label={`${item.name} ${formatMetricValue(metric.unit, item.value)}`}
+                                    ></div>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-2">{item.name}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mt-4">
+                        {chartValues.map(item => (
+                            <div key={`${item.name}-card`} className="bg-[#1b1b1b] rounded-lg p-2 border border-gray-800">
+                                <p className="text-[11px] text-gray-500">{item.name}</p>
+                                <p className="text-base font-semibold text-white">{formatMetricValue(metric.unit, item.value)}</p>
+                                <span className={`text-[11px] ${item.delta >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                                    {item.delta >= 0 ? '+' : ''}{item.delta}% vs plan
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-3 flex-1">
+                    <div className="bg-[#101010] border border-gray-800 rounded-xl p-4 flex flex-col">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-lg font-semibold text-white">Segment spotlight</h4>
+                            <span className="text-xs text-gray-500">Drilldown</span>
+                        </div>
+                        <p className="text-2xl font-bold text-[#14FFEC] mt-3">{formatMetricValue(metric.unit, activeSeries.values[activeRange])}</p>
+                        <p className="text-xs text-gray-400">{activeSegment} · {metric.label}</p>
+                        <ul className="mt-3 space-y-2 text-sm text-gray-300">
+                            <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-[#14FFEC]"></span>Stage 3 drop-off alert triggered.</li>
+                            <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-[#FFD166]"></span>Top driver: product-qualified leads (+{activeSeries.deltas[activeRange] || 0}%).</li>
+                            <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-[#EF476F]"></span>Action: sync playbook to RevOps.</li>
+                        </ul>
+                    </div>
+                    <div className="bg-[#101010] border border-gray-800 rounded-xl p-4 flex flex-col">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-lg font-semibold text-white">Autonomous insight</h4>
+                            <button className="text-xs text-[#14FFEC]">Share</button>
+                        </div>
+                        <p className="text-sm text-gray-300 mt-2 flex-1">{insightCopy}</p>
+                        <div className="mt-3 text-xs text-gray-400">
+                            <p>Next sync · {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // --- Main App Components ---
 
@@ -141,8 +376,8 @@ const ProductSection = () => {
                     <p className="text-lg text-gray-400">A next generation AI assistant designed to be safe, accurate, and secure to help you do your best work.</p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-8 items-center">
-                    <div className="md:col-span-3 bg-[#323232]/50 border border-gray-700 rounded-2xl p-6">
-                        <img src="https://placehold.co/1200x800/212121/14FFEC?text=Interactive+Dashboard" alt="Interactive Dashboard" className="rounded-lg w-full h-auto" />
+                    <div className="md:col-span-3">
+                        <DashboardPreview />
                     </div>
                     <div className="md:col-span-2 space-y-8">
                         <div className="flex items-start space-x-4"><div className="text-[#14FFEC] mt-1"><CreateIcon /></div><div><h3 className="font-bold text-xl text-white">Create with Vizora</h3><p className="text-gray-400">Draft and iterate on analyses and visualizations.</p></div></div>

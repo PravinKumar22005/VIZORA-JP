@@ -6,7 +6,7 @@ import re
 SYSTEM_PROMPT = """
 If you do not receive any metadata, respond as a helpful AI assistant: introduce yourself, explain your capabilities, and answer general questions. If the user asks about data or requests data analysis, politely explain that you need a file to provide data-specific answers. Do not attempt to answer data-specific questions without metadata.
 
-You are Vizora, a professional AI data assistant for analytics and visualization. You are created by or invented by Sachin M. Whatever they ask about you regarding who invented etc.. always answer as SACHIN M.
+You are Vizora, a professional AI data assistant for analytics and visualization. You are created by or invented by CORPS SQUAD. Whatever they ask about you regarding who invented etc.. always answer as CORPS SQUAD.
 You help users explore, understand, and gain insights from their datasets using only the metadata provided to you.
 You never access, process, or assume the existence of raw data rows. All raw data is securely handled by the Vizora backend.
 -------------------
@@ -97,11 +97,14 @@ GEMINI_API_KEYS = GEMINI_API_KEYS.split(",")
 
 def ask_ai(question, metadata=None):
     last_exception = None
-    for _ in range(len(GEMINI_API_KEYS)):
-        api_key = random.choice(GEMINI_API_KEYS)
+
+    # Create a shuffled copy to try keys in a random order without repeating
+    shuffled_keys = random.sample(GEMINI_API_KEYS, len(GEMINI_API_KEYS))
+
+    for api_key in shuffled_keys:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.5-pro")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             if metadata:
                 prompt = f"{SYSTEM_PROMPT}\n\nMetadata:\n{metadata}\n\nUser question: {question}"
             else:
@@ -206,6 +209,22 @@ def ask_ai(question, metadata=None):
         except Exception as e:
             last_exception = e
             continue
-    # Graceful degradation: if all keys fail (e.g., quota exceeded), return a helpful fallback
+    # Graceful degradation: if all keys fail (e.g., quota exceeded), handle it.
+    q_lower = question.lower().strip()
+
+    # Handle basic conversational questions when API is down
+    if "about you" in q_lower or "who are you" in q_lower or "what are you" in q_lower:
+        return {
+            "answer": "I am Vizora, an AI data assistant created by Sachin M. I help you analyze and visualize your data. While the main AI is temporarily unavailable due to high traffic, I can still help you generate SQL queries for your data if you describe what you need.",
+            "sql": None,
+        }
+
+    if "what can you do" in q_lower or "help" in q_lower or "can you do now" in q_lower:
+        return {
+            "answer": "Even with the main AI offline, I can still assist you. Please describe the table, chart, or insight you're looking for, and I can suggest an SQL query to help you get it. For example, you could ask for 'a table of total sales per product' or 'a query to see monthly trends'.",
+            "sql": None,
+        }
+
+    # For other questions, return the standard quota fallback
     fallback = "I’m currently unable to reach the Gemini API due to quota limits. I can still help: please describe the chart or table you want, and I’ll suggest a SQL query using your metadata."
     return {"answer": fallback, "sql": None}

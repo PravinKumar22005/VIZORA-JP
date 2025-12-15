@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { chatApi } from '../../services/chatApi';
 import { analyzeChatTitle } from '../../utils/gemini';
 import { shareChat as shareChatApi, getSharedChat as getSharedChatApi } from '../../services/sharingApi';
@@ -6,7 +7,7 @@ import { aiApi } from '../../services/aiApi';
 import { tableQueryApi } from '../../services/tableQueryApi';
 import { dashboardApi } from '../../services/dashboardApi';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Search, Plus, Menu, X, User, Trash2, ChevronRight, HardDrive, FileText, FileX2, ChevronsLeft, ChevronsRight, ArrowRight, Clipboard, Eye, LayoutDashboard, LifeBuoy, Paperclip, Send, AlertTriangle, Settings, MailOpen, Pencil, LogOut, Info } from 'lucide-react';
+import { Plus, Search, ChevronRight, ChevronsLeft, Trash2, Settings, LogOut, Eye, Menu, Pencil, FileText, HardDrive, ArrowRight, X, Info, FileX2, AlertTriangle, User, Clipboard, LifeBuoy, LayoutDashboard, MailOpen, ChevronsRight, Paperclip, Send } from 'lucide-react';
 // Note: PapaParse and XLSX are assumed to be loaded via script tags.
 
 const RecycleBinModal = ({ onClose, deletedChats, onRestoreChat, onDeleteChat }) => {
@@ -142,6 +143,8 @@ export default function App({ userData: externalUserData }) {
     const [lastDeletedFile, setLastDeletedFile] = useState(null);
     const [aiFilePickerOpen, setAiFilePickerOpen] = useState(false);
     const [selectedAIFileIds, setSelectedAIFileIds] = useState([]); // file metadata ids to send to /ai/ask
+
+    const navigate = useNavigate();
 
     // --- Refs ---
     const fileInputRef = useRef(null);
@@ -542,28 +545,21 @@ export default function App({ userData: externalUserData }) {
 
     const handleDeleteChat = async (chatId) => {
         try {
-            await chatApi.softDeleteChat(chatId);
-            // Always refresh chat list from backend after delete
+            await chatApi.deleteChat(chatId);
+            showToast('Chat moved to recycle bin.', 'info');
+            
+            // Refetch chats to ensure UI is up-to-date
             const remoteChats = await chatApi.listChats();
             const enriched = remoteChats.map(c => ({ ...c, messages: [], files: [], loaded: false }));
             const deduped = Array.from(new Map(enriched.map(c => [c.id, c])).values());
             setChats(deduped);
             // If the deleted chat was active, clear activeChatId
             if (activeChatId === chatId) {
-                const newActiveId = deduped.length > 0 ? deduped[0].id : null;
-                setActiveChatId(newActiveId);
-                if (deduped.length === 0) {
-                    handleNewChat();
-                }
+                setActiveChatId(null);
             }
-            // Refetch deleted chats for recycle bin
-            try {
-                const deleted = await chatApi.listDeletedChats();
-                setDeletedChats(deleted);
-            } catch {}
-            showToast("Chat deleted.", "success");
-        } catch {
-            showToast("Failed to delete chat.", "error");
+        } catch (error) {
+            console.error("Failed to delete chat:", error);
+            showToast(error.message || 'Failed to delete chat.', 'error');
         }
     };
 
@@ -686,15 +682,28 @@ export default function App({ userData: externalUserData }) {
         setIsEditingTitle(true);
     };
 
-    const handleRenameChat = () => {
+    const handleRenameChat = async () => {
         if (!activeChat || !editingTitle.trim()) {
             setIsEditingTitle(false);
             return;
         }
+        const newTitle = editingTitle.trim();
+        const chatId = activeChatId;
+        const previousTitle = activeChat.title;
         setChats(prev => prev.map(chat =>
-            chat.id === activeChatId ? { ...chat, title: editingTitle.trim() } : chat
+            chat.id === chatId ? { ...chat, title: newTitle } : chat
         ));
         setIsEditingTitle(false);
+        try {
+            await chatApi.renameChat(chatId, newTitle);
+            showToast('Chat renamed successfully', 'success');
+        } catch (err) {
+            console.error('Rename chat failed', err);
+            setChats(prev => prev.map(chat =>
+                chat.id === chatId ? { ...chat, title: previousTitle } : chat
+            ));
+            showToast('Unable to rename chat', 'error');
+        }
     };
 
     const handleShareCode = async () => {
@@ -708,23 +717,98 @@ export default function App({ userData: externalUserData }) {
         }
     };
     
-    const handleRequestDashboard = async (fileMsgId) => {
-    const chat = (latestChatsRef.current || []).find(c => c.id === activeChatId);
-    if (!chat) return;
-    const fileEntry = (chat.messages || []).find(m => m.id === fileMsgId && m.file);
-        if (!fileEntry) return showToast('File not found','error');
+    const handleRequestDashboard = async (fileIdentifiers) => {
+        const chat = (latestChatsRef.current || []).find(c => c.id === activeChatId);
+        if (!chat) return;
+
+        const normalizeId = (value) => {
+            if (value === null || value === undefined) return '';
+            return String(value).trim();
+        };
+
+        const ids = (Array.isArray(fileIdentifiers) ? fileIdentifiers : [fileIdentifiers])
+            .map(normalizeId)
+            .filter(Boolean);
+
+        if (ids.length === 0) {
+            return showToast('No files selected for the dashboard.', 'error');
+        }
+
+        const messageFileMap = new Map(
+            (chat.messages || [])
+                .filter(msg => msg?.file?.meta?.id)
+                .map(msg => [
+                    normalizeId(msg.id),
+                    {
+                        id: msg.file.meta.id,
+                        name: msg.file.name || msg.file.meta.file_name || msg.file.meta.original_file_name
+                    }
+                ])
+        );
+
+        const uploadedFileMap = new Map(
+            (chat.files || [])
+                .filter(file => file?.id)
+                .map(file => [
+                    normalizeId(file.id),
+                    {
+                        id: file.id,
+                        name: file.file_name || file.original_file_name || file.display_name || file.name
+                    }
+                ])
+        );
+
+        const resolvedFiles = ids.map(identifier => {
+            if (messageFileMap.has(identifier)) return messageFileMap.get(identifier);
+            if (uploadedFileMap.has(identifier)) return uploadedFileMap.get(identifier);
+            return null;
+        }).filter(Boolean);
+
+        if (resolvedFiles.length === 0) {
+            return showToast('No files selected for the dashboard.', 'error');
+        }
+
+        if (resolvedFiles.length !== ids.length) {
+            return showToast('One or more selected files could not be found.', 'error');
+        }
+
+        const uniqueFileIds = Array.from(new Set(resolvedFiles.map(file => file.id).filter(Boolean)));
+        if (uniqueFileIds.length === 0) {
+            return showToast('No files selected for the dashboard.', 'error');
+        }
+
+        const stripExtension = (name) => {
+            if (!name) return '';
+            return name.replace(/\.(csv|xlsx)$/i, '').trim();
+        };
+
+        const fileNames = resolvedFiles.map(file => file.name).filter(Boolean);
+        let dashboardName = 'Dashboard';
+        if (fileNames.length === 1) {
+            dashboardName = `${stripExtension(fileNames[0]) || 'Dataset'} Dashboard`;
+        } else if (chat.title && chat.title !== 'New Conversation') {
+            dashboardName = `${chat.title} Dashboard`;
+        } else {
+            dashboardName = `Dashboard for ${fileNames.length} files`;
+        }
+
+        const dashboardPayload = {
+            dashboard_name: dashboardName,
+            file_ids: uniqueFileIds,
+            dashboard_json: []
+        };
+
         try {
-            // Use file metadata columns to build a minimal dashboard_json placeholder
-            const dashboardPayload = {
-                dashboard_name: fileEntry.file.name.replace(/\.(csv|xlsx)$/i, '') + ' Dashboard',
-                dashboard_json: []
-            };
-            const created = await dashboardApi.createDashboard(dashboardPayload.dashboard_json, dashboardPayload.dashboard_name);
-            showToast(`Dashboard created (ID ${created.id})`, 'success');
-            // Redirect to dashboard view with id param (assumes route handles ?id=)
-            setTimeout(() => { window.location.href = `/dashboard?id=${created.id}`; }, 600);
-        } catch(e){
-            showToast('Dashboard creation failed','error');
+            const created = await dashboardApi.createDashboard(dashboardPayload);
+            showToast(`Dashboard "${created.dashboard_name}" created successfully!`, 'success');
+            setSelectedAIFileIds([]);
+            setAiFilePickerOpen(false);
+            setTimeout(() => {
+                window.location.href = `/dashboard?id=${created.id}`;
+            }, 600);
+        } catch (e) {
+            console.error('Dashboard creation error:', e);
+            showToast(e.response?.data?.detail || 'Dashboard creation failed', 'error');
         } finally {
             setShowFileDashboard(false);
         }
@@ -750,6 +834,18 @@ export default function App({ userData: externalUserData }) {
         }
     };
 
+    const handleNavigateToDashboard = () => {
+        navigate('/dashboard');
+    };
+
+    const handleQuickDashboardCreate = () => {
+        if (!activeChat || !activeChat.files || activeChat.files.length === 0) {
+            return showToast('Upload a file before creating a dashboard.', 'error');
+        }
+        const ids = selectedAIFileIds.length > 0 ? selectedAIFileIds : activeChat.files.map(f => f.id);
+        handleRequestDashboard(ids);
+    };
+
     return (
         <div className="font-sans antialiased text-gray-200 bg-[#212121] h-screen w-screen overflow-hidden flex relative">
             <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0">
@@ -762,17 +858,25 @@ export default function App({ userData: externalUserData }) {
                     <motion.aside key="sidebar" initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                         className="bg-[#323232]/80 backdrop-blur-md h-full z-20 flex flex-col" style={{ width: isMobile ? '85%' : '260px' }}>
                         <Sidebar
-                            chats={filteredChats} activeChatId={activeChatId} setActiveChatId={setActiveChatId}
+                            chats={filteredChats}
+                            activeChatId={activeChatId}
+                            setActiveChatId={setActiveChatId}
                             onNewChat={handleNewChat}
                             onDeleteChat={() => requestDeleteChat(activeChatId)}
                             onToggleSidebar={() => setIsSidebarOpen(false)}
-                            searchTerm={searchTerm} setSearchTerm={setSearchTerm} viewCode={viewCode} setViewCode={setViewCode} onViewSharedChat={handleViewSharedChat}
+                            searchTerm={searchTerm}
+                            setSearchTerm={setSearchTerm}
+                            viewCode={viewCode}
+                            setViewCode={setViewCode}
+                            onViewSharedChat={handleViewSharedChat}
                             onShowAccount={() => setShowAccountModal(true)}
                             onShowContact={() => setShowContactModal(true)}
                             onShareCode={handleShareCode}
                             onClearHistory={requestDeleteHistory}
                             onLogout={requestLogout}
                             setShowRecycleBin={setShowRecycleBin}
+                            onNavigateToDashboard={handleNavigateToDashboard}
+                            activeChat={activeChat}
                         />
                     </motion.aside>
                 )}
@@ -817,7 +921,7 @@ export default function App({ userData: externalUserData }) {
                                 </motion.div>
                             )}
                         </AnimatePresence>
-                        <button onClick={() => setShowFileDashboard(true)} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC] disabled:opacity-50 disabled:cursor-not-allowed" disabled={!activeChat || activeChat.messages.filter(m => m.file).length === 0}>
+                        <button onClick={handleQuickDashboardCreate} className="p-2 rounded-full hover:bg-gray-700/80 transition-colors focus:outline-none focus:ring-2 focus:ring-[#14FFEC] disabled:opacity-50 disabled:cursor-not-allowed" title="Create Dashboard from Chat Files" disabled={!activeChat || !activeChat.files || activeChat.files.length === 0}>
                            <LayoutDashboard className="w-6 h-6 text-gray-300" />
                         </button>
                                                 {activeChat && activeChat.files && activeChat.files.length > 0 && (
@@ -950,7 +1054,7 @@ const SettingsDropdown = ({ onAction }) => (
     </motion.div>
 );
 
-const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, viewCode, setViewCode, onViewSharedChat, onShowAccount, onShowContact, onShareCode, onClearHistory, onLogout, setShowRecycleBin }) => {
+const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat, onToggleSidebar, searchTerm, setSearchTerm, viewCode, setViewCode, onViewSharedChat, onShowAccount, onShowContact, onShareCode, onClearHistory, onLogout, setShowRecycleBin, onNavigateToDashboard, activeChat }) => {
     const [showSettings, setShowSettings] = useState(false);
     const [animatingButton, setAnimatingButton] = useState(null);
     const settingsRef = useRef(null);
@@ -994,21 +1098,20 @@ const Sidebar = ({ chats, activeChatId, setActiveChatId, onNewChat, onDeleteChat
         <nav className="flex-1 overflow-y-auto pr-1 -mr-1 custom-scrollbar">
             <ul className="space-y-1">
                 <AnimatePresence>
-                    {chats.map(chat => {
-                        return (
+                    {chats.map(chat => (
                         <motion.li key={chat.id} layout initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.2 }} >
                             <button type="button" onClick={() => setActiveChatId(chat.id)} className={`w-full text-left flex items-center justify-between p-2.5 rounded-lg text-sm font-medium transition-colors group ${ activeChatId === chat.id ? 'bg-[#14FFEC] text-black shadow-lg' : 'hover:bg-gray-700/60 text-gray-300' }`} >
                                 <span className="truncate flex-1">{chat.title}</span>
                                 {activeChatId === chat.id && <ChevronRight className="w-4 h-4 flex-shrink-0 ml-1" />}
                             </button>
                         </motion.li>
-                    )})}
+                    ))}
                 </AnimatePresence>
             </ul>
         </nav>
 
         <div className="mt-auto pt-4 border-t border-gray-700/50 space-y-1">
-            <SidebarButton icon={LayoutDashboard} text="New Dashboard" onClick={() => {}} disabled={true} />
+            <SidebarButton icon={LayoutDashboard} text="New Dashboard" onClick={onNavigateToDashboard} />
             <SidebarButton icon={Trash2} text="Delete Chat" onClick={onDeleteChat} danger isAnimating={animatingButton === 'Delete Chat'} startAnimation={() => setAnimatingButton('Delete Chat')} onAnimationEnd={() => setAnimatingButton(null)} />
             <div className="relative" ref={settingsRef}>
                 <SidebarButton icon={Settings} text="Settings" onClick={() => setShowSettings(s => !s)} isAnimating={animatingButton === 'Settings'} startAnimation={() => setAnimatingButton('Settings')} onAnimationEnd={() => setAnimatingButton(null)} />
@@ -1262,7 +1365,7 @@ const AccountModal = ({ userData, onClose, onDeleteHistory, onShowPasswordChange
         <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
             className="bg-[#323232] rounded-xl w-full max-w-md p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
             <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
-            <h2 className="text-2xl font-bold mb-6 text-white">Account Settings</h2>
+            <h2 className="text-2xl font-bold mb-6 text-white">Account Details</h2>
             <div className="space-y-4">
                 <InfoDisplay label="Name" value={userData.name} />
                 <InfoDisplay label="Email" value={userData.email} />
@@ -1336,7 +1439,7 @@ const FilePreviewModal = ({ file, onClose }) => {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={onClose}>
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} className="bg-[#212121] rounded-xl w-full max-w-4xl h-[90vh] flex flex-col border border-gray-700/50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <header className="p-4 flex items-center justify-between border-b border-gray-700/50 flex-shrink-0">
-                    <h2 className="text-xl font-bold mb-2 text-white truncate">{file.name}</h2> <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
+                    <h2 className="text-2xl font-bold mb-2 text-white truncate">{file.name}</h2> <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
                 </header>
                 <div className="p-4 flex-shrink-0 flex flex-col md:flex-row gap-4 items-center">
                     {workbook && (<select value={activeSheet} onChange={(e) => handleSheetChange(parseInt(e.target.value))} className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14FFEC]">{workbook.SheetNames.map((name, index) => (<option key={name} value={index}>{name}</option>))}</select>)}
@@ -1366,7 +1469,7 @@ const FilePreviewModal = ({ file, onClose }) => {
 }
 
 const FileDashboardModal = ({ chat, onClose, onConfirm }) => {
-    const [selectedFileId, setSelectedFileId] = useState(null);
+    const [selectedFileIds, setSelectedFileIds] = useState([]);
 
     const uploadedFilesWithMsgId = useMemo(() => {
         return chat?.messages
@@ -1374,28 +1477,36 @@ const FileDashboardModal = ({ chat, onClose, onConfirm }) => {
             .map(msg => ({ file: msg.file, msgId: msg.id })) || [];
     }, [chat]);
 
+    const handleSelection = (msgId) => {
+        setSelectedFileIds(prev =>
+            prev.includes(msgId)
+                ? prev.filter(id => id !== msgId)
+                : [...prev, msgId]
+        );
+    };
+
     return (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4" onClick={onClose}>
             <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }}
                 className="bg-[#323232] rounded-xl w-full max-w-md p-6 border border-gray-700/50 shadow-2xl relative" onClick={(e) => e.stopPropagation()}>
                 <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-gray-700/80 transition-colors"><X className="w-5 h-5" /></button>
-                <h2 className="text-2xl font-bold mb-2 text-white">Select a File</h2>
-                <p className="text-sm text-gray-400 mb-6">Choose a file to focus on from: <span className="font-medium text-gray-300 truncate">{chat?.title || 'this chat'}</span></p>
+                <h2 className="text-2xl font-bold mb-2 text-white">Create Dashboard</h2>
+                <p className="text-sm text-gray-400 mb-6">Choose one or more files from <span className="font-medium text-gray-300 truncate">{chat?.title || 'this chat'}</span> to build a dashboard.</p>
 
                 <div className="max-h-80 overflow-y-auto custom-scrollbar pr-2 -mr-2">
                     {uploadedFilesWithMsgId.length > 0 ? (
                         <fieldset className="space-y-3">
                              <legend className="sr-only">Uploaded Files</legend>
                             {uploadedFilesWithMsgId.map(({ file, msgId }) => (
-                                <label key={msgId} htmlFor={msgId} className={`bg-gray-800/50 p-3 rounded-lg flex items-center gap-3 cursor-pointer transition-all border-2 ${selectedFileId === msgId ? 'border-[#14FFEC]' : 'border-transparent hover:border-gray-600'}`}>
+                                <label key={msgId} htmlFor={msgId} className={`bg-gray-800/50 p-3 rounded-lg flex items-center gap-3 cursor-pointer transition-all border-2 ${selectedFileIds.includes(msgId) ? 'border-[#14FFEC]' : 'border-transparent hover:border-gray-600'}`}>
                                     <input
-                                        type="radio"
+                                        type="checkbox"
                                         id={msgId}
                                         name="fileSelection"
                                         value={msgId}
-                                        checked={selectedFileId === msgId}
-                                        onChange={() => setSelectedFileId(msgId)}
-                                        className="h-4 w-4 text-[#14FFEC] bg-gray-700 border-gray-600 focus:ring-[#14FFEC] focus:ring-2"
+                                        checked={selectedFileIds.includes(msgId)}
+                                        onChange={() => handleSelection(msgId)}
+                                        className="h-4 w-4 rounded text-[#14FFEC] bg-gray-700 border-gray-600 focus:ring-[#14FFEC] focus:ring-2"
                                     />
                                     <div className="p-2 bg-gray-600 rounded-md">
                                         {file.type === 'CSV' ? <FileText className="w-5 h-5 text-[#14FFEC]" /> : <HardDrive className="w-5 h-5 text-[#14FFEC]" />}
@@ -1410,8 +1521,8 @@ const FileDashboardModal = ({ chat, onClose, onConfirm }) => {
                     ) : ( <div className="text-center py-8 text-gray-500"><FileX2 className="w-10 h-10 mx-auto mb-2" /><p>No files have been uploaded in this chat.</p></div> )}
                 </div>
                 <div className="mt-6 flex justify-end">
-                    <button onClick={() => { if(selectedFileId) onConfirm(selectedFileId)}} disabled={!selectedFileId} className="py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors disabled:opacity-50">
-                        Confirm
+                    <button onClick={() => { if(selectedFileIds.length > 0) onConfirm(selectedFileIds)}} disabled={selectedFileIds.length === 0} className="py-2 px-5 rounded-lg text-sm font-semibold text-black bg-[#14FFEC] hover:bg-white transition-colors disabled:opacity-50">
+                        Create Dashboard
                     </button>
                 </div>
             </motion.div>

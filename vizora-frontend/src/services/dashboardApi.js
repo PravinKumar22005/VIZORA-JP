@@ -30,11 +30,11 @@ const dashboardApi = {
   },
 
   // Create a new dashboard (session)
-  createDashboard: async (dashboardJson, dashboardName) => {
+  createDashboard: async (dashboardData) => {
     const token = localStorage.getItem('token');
     const response = await axios.post(
       `${API_URL}/dashboard`,
-      { dashboard_json: dashboardJson, dashboard_name: dashboardName },
+      dashboardData,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     return response.data;

@@ -32,6 +32,17 @@ export const chatApi = {
     return response.data;
   },
 
+  // Rename chat title
+  renameChat: async (chatId, title) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.patch(
+      `${API_URL}/chats/${chatId}/title`,
+      { title },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return response.data;
+  },
+
   // List deleted chats for the user (for recycle bin)
   listDeletedChats: async () => {
     const token = localStorage.getItem('token');

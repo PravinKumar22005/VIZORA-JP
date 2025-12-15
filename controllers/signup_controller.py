@@ -6,6 +6,7 @@ from utils.jwt import create_access_token
 from fastapi import HTTPException
 from datetime import datetime
 
+
 def signup_user(name: str, email: str, password: str):
     db = SessionLocal()
     try:
@@ -22,25 +23,27 @@ def signup_user(name: str, email: str, password: str):
             email=email,
             password=hashed_password,
             created_at=now,
-            last_login=now
+            last_login=now,
         )
-        
+
         db.add(user)
         db.commit()
         db.refresh(user)
-        
+
         # Create a token for the new user, just like in login
         access_token = create_access_token(data={"sub": user.email})
         return {
             "access_token": access_token,
             "token_type": "bearer",
-            "user": {"id": user.id, "name": user.name, "email": user.email}
+            "user": {"id": user.id, "name": user.name, "email": user.email},
         }
     except Exception as e:
         db.rollback()
         # Check for specific integrity error for existing user
         if isinstance(e, IntegrityError):
-             raise HTTPException(status_code=400, detail="Email already registered")
-        raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(
+                status_code=400, detail="Email already registered"
+            ) from e
+        raise HTTPException(status_code=500, detail=str(e)) from e
     finally:
         db.close()

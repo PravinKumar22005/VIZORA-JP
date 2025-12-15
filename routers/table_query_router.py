@@ -137,9 +137,34 @@ def table_query(req: TableQueryRequest, user: User = Depends(get_current_user)):
         if not file_meta:
             db.close()
             raise HTTPException(status_code=404, detail=f"File {fid} not found")
-        else:
+
+        # Download from Azure and load into pandas
+        file_content = download_file_from_azure(file_meta.bucket_path)
+        file_name_lower = file_meta.file_name.lower()
+
+        df = None
+        try:
+            if file_name_lower.endswith(".csv"):
+                df = pd.read_csv(io.BytesIO(file_content))
+            elif file_name_lower.endswith(".xlsx"):
+                df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
+            elif file_name_lower.endswith(".xls"):
+                df = pd.read_excel(io.BytesIO(file_content), engine="xlrd")
+            elif file_name_lower.endswith(".xlsb"):
+                df = pd.read_excel(io.BytesIO(file_content), engine="pyxlsb")
+            else:
+                db.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type for querying: {file_meta.file_name}",
+                )
+        except Exception as e:
             db.close()
-            raise HTTPException(status_code=400, detail="Unsupported file type")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to read or parse file {file_meta.file_name}: {e}",
+            )
+
         # Add robust helpers for date grouping and joins
         df = add_time_derivatives(df)
         df = add_normalized_keys(df)

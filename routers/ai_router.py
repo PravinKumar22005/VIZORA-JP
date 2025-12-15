@@ -62,11 +62,18 @@ def ai_ask(req: AIAskRequest, user: User = Depends(get_current_user)):
             "table_names": file_meta.table_names,
         }
     # If neither, metadata remains None
+
     answer = ask_ai(req.question, metadata)
 
-    # --- Save messages to chat history ---
-    if chat_id:
-        add_message(user.id, chat_id, req.question, "user")
-        add_message(user.id, chat_id, answer["answer"], "bot")
+    # Save bot's response to the database
+    if chat_id and answer and answer.get("answer"):
+        bot_response_text = answer["answer"]
+        if answer.get("sql"):
+            bot_response_text += f"\n```sql\n{answer['sql']}\n```"
+        add_message(
+            user_id=user.id, chat_id=chat_id, text=bot_response_text, sender="bot"
+        )
 
+    # The frontend is responsible for saving the user and bot messages.
+    # The AI router's only job is to get the answer.
     return answer
