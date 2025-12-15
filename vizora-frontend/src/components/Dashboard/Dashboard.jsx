@@ -920,9 +920,358 @@ const KPICard = ({ title, value, prefix = '', suffix = ''}) => {
     return (<Panel className="text-center relative"><h3 className="text-sm text-gray-400 uppercase tracking-wider h-10">{title}</h3><p className="text-4xl font-bold text-[#14FFEC] mt-2">{prefix}{typeof value === 'number' ? value.toLocaleString(undefined, {maximumFractionDigits: 2}) : value}{suffix}</p></Panel>);
 };
 const GaugeChart = ({ title, value, max, ChartJS, description }) => { return <Panel/> };
+
+const LIVE_GRADIENTS = [
+    'from-[#14FFEC] to-[#0D7377]',
+    'from-[#7C4DFF] to-[#3E206D]',
+    'from-[#FF8A00] to-[#FF3CAC]',
+    'from-[#00D2FF] to-[#3A7BD5]',
+    'from-[#F83600] to-[#F9D423]',
+    'from-[#845EF7] to-[#5F3DC4]'
+];
+const LIVE_TIME_WINDOWS = [
+    { id: 'all', label: 'All data' },
+    { id: '7', label: 'Last 7 days' },
+    { id: '30', label: '30 days' },
+    { id: '90', label: '90 days' }
+];
+const CURRENCY_KEYWORDS = ['revenue','rev','sales','sale','amount','cost','profit','price','value','pipeline','income','expense'];
+const PERCENT_KEYWORDS = ['rate','ratio','percent','conversion','margin','retention','growth'];
+const MAX_SEGMENT_SLICES = 6;
+
+const LiveDataSpotlight = ({ data, featuredCharts = [], ChartJS, onDrilldown }) => {
+    const quality = useMemo(() => calculateDataQuality(data), [data]);
+    const numericColumns = useMemo(() => Object.entries(quality || {}).filter(([, meta]) => meta.type === 'numeric'), [quality]);
+    const categoricalColumns = useMemo(() => Object.entries(quality || {}).filter(([, meta]) => meta.type === 'categorical' && meta.uniqueCount > 1 && meta.uniqueCount <= 50), [quality]);
+    const temporalColumns = useMemo(() => Object.entries(quality || {}).filter(([, meta]) => meta.type === 'temporal'), [quality]);
+    const temporalKey = temporalColumns[0]?.[0] || null;
+
+    const [activeMetric, setActiveMetric] = useState(numericColumns[0]?.[0] || null);
+    const [activeSegment, setActiveSegment] = useState(categoricalColumns[0]?.[0] || null);
+    const [timeframe, setTimeframe] = useState('all');
+
+    useEffect(() => {
+        if (numericColumns.length === 0) { setActiveMetric(null); return; }
+        if (!numericColumns.find(([name]) => name === activeMetric)) {
+            setActiveMetric(numericColumns[0][0]);
+        }
+    }, [numericColumns, activeMetric]);
+
+    useEffect(() => {
+        if (categoricalColumns.length === 0) { setActiveSegment(null); return; }
+        if (!categoricalColumns.find(([name]) => name === activeSegment)) {
+            setActiveSegment(categoricalColumns[0][0]);
+        }
+    }, [categoricalColumns, activeSegment]);
+
+    useEffect(() => {
+        if (!temporalKey) {
+            setTimeframe('all');
+        }
+    }, [temporalKey]);
+
+    const filteredRows = useMemo(() => {
+        if (!Array.isArray(data) || data.length === 0) return [];
+        if (!temporalKey || timeframe === 'all') return data;
+        const parsedRows = data.map(row => {
+            const raw = row[temporalKey];
+            const parsed = raw ? new Date(raw) : null;
+            return parsed && !isNaN(parsed) ? { row, date: parsed } : null;
+        }).filter(Boolean);
+        if (parsedRows.length === 0) return data;
+        const latestDate = parsedRows.reduce((max, item) => (item.date > max ? item.date : max), parsedRows[0].date);
+        const rangeDays = parseInt(timeframe, 10);
+        if (isNaN(rangeDays)) return data;
+        const threshold = new Date(latestDate);
+        threshold.setDate(threshold.getDate() - rangeDays);
+        const windowed = parsedRows.filter(item => item.date >= threshold).map(item => item.row);
+        return windowed.length > 0 ? windowed : data;
+    }, [data, temporalKey, timeframe]);
+
+    const coerceNumber = (value) => {
+        if (value === null || value === undefined) return null;
+        if (typeof value === 'number') return isFinite(value) ? value : null;
+        const parsed = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+        return isNaN(parsed) ? null : parsed;
+    };
+
+    const aggregated = useMemo(() => {
+        if (!activeMetric || filteredRows.length === 0) return [];
+        if (activeSegment) {
+            const totalsBySegment = filteredRows.reduce((acc, row) => {
+                const bucket = row[activeSegment] ?? 'Unlabeled';
+                const metricValue = coerceNumber(row[activeMetric]);
+                if (metricValue === null) return acc;
+                acc[bucket || 'Unlabeled'] = (acc[bucket || 'Unlabeled'] || 0) + metricValue;
+                return acc;
+            }, {});
+            return Object.entries(totalsBySegment)
+                .map(([name, total]) => ({ name, total }))
+                .sort((a, b) => b.total - a.total)
+                .slice(0, MAX_SEGMENT_SLICES);
+        }
+        const total = filteredRows.reduce((sum, row) => {
+            const metricValue = coerceNumber(row[activeMetric]);
+            return metricValue === null ? sum : sum + metricValue;
+        }, 0);
+        return total ? [{ name: 'All Data', total }] : [];
+    }, [filteredRows, activeMetric, activeSegment]);
+
+    const averageValue = aggregated.length > 0 ? aggregated.reduce((sum, seg) => sum + seg.total, 0) / aggregated.length : 0;
+    const chartSeries = aggregated.map((seg, idx) => ({
+        ...seg,
+        color: LIVE_GRADIENTS[idx % LIVE_GRADIENTS.length],
+        delta: averageValue ? ((seg.total - averageValue) / averageValue) * 100 : 0
+    }));
+    const chartPeak = chartSeries.length > 0 ? Math.max(...chartSeries.map(seg => seg.total), 1) : 1;
+    const leader = chartSeries[0];
+    const laggard = chartSeries.length > 1 ? chartSeries[chartSeries.length - 1] : null;
+
+    const metricDescriptor = activeMetric ? quality?.[activeMetric] : null;
+    const metricName = activeMetric || 'selected metric';
+    const lowerMetricName = metricName.toLowerCase();
+    const isCurrency = activeMetric ? CURRENCY_KEYWORDS.some(keyword => lowerMetricName.includes(keyword)) : false;
+    const isPercent = activeMetric ? (!isCurrency && PERCENT_KEYWORDS.some(keyword => lowerMetricName.includes(keyword))) : false;
+
+    const formatValue = (value) => {
+        if (value === null || value === undefined || isNaN(value)) return '—';
+        if (isCurrency) {
+            const abs = Math.abs(value);
+            if (abs >= 1_000_000) return `${value < 0 ? '-' : ''}$${(abs / 1_000_000).toFixed(1)}M`;
+            if (abs >= 1_000) return `${value < 0 ? '-' : ''}$${(abs / 1_000).toFixed(1)}K`;
+            return `${value < 0 ? '-' : ''}$${abs.toFixed(abs >= 10 ? 0 : 2)}`;
+        }
+        if (isPercent) {
+            return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+        }
+        return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    };
+
+    const summaryValues = useMemo(() => {
+        if (!activeMetric || filteredRows.length === 0) return { total: 0, avg: 0, count: 0 };
+        const values = filteredRows
+            .map(row => coerceNumber(row[activeMetric]))
+            .filter(v => v !== null);
+        if (values.length === 0) return { total: 0, avg: 0, count: 0 };
+        const total = values.reduce((sum, val) => sum + val, 0);
+        return { total, avg: total / values.length, count: values.length };
+    }, [filteredRows, activeMetric]);
+
+    const coverage = metricDescriptor?.missingPercentage ? Math.max(0, 100 - parseFloat(metricDescriptor.missingPercentage)) : null;
+    const recordsAnalyzed = filteredRows.length;
+    const timeframeLabel = timeframe === 'all' ? 'All available dates' : `Last ${timeframe} days`;
+    const insightCopy = leader
+        ? laggard
+            ? `${leader.name} contributes ${formatValue(leader.total)} toward ${metricName}, outperforming ${laggard.name} by ${formatValue(Math.abs(leader.total - laggard.total))}.`
+            : `${leader.name} contributes ${formatValue(leader.total)} toward ${metricName}.`
+        : 'Add a categorical column or choose another metric to surface comparisons.';
+
+    if (!data || data.length === 0) {
+        return null;
+    }
+
+    if (numericColumns.length === 0) {
+        return (
+            <Panel className="mb-8 bg-[#2a2a2a] border border-dashed border-gray-700 text-center">
+                <h3 className="text-xl font-semibold text-white mb-2">Live data spotlight</h3>
+                <p className="text-gray-400 text-sm">Upload a dataset with at least one numeric column to unlock the interactive insight panel.</p>
+            </Panel>
+        );
+    }
+
+    return (
+        <div className="mb-8 bg-[#161616] border border-gray-800 rounded-2xl p-5 md:p-6 shadow-2xl shadow-black/40">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Live dataset pulse</p>
+                    <h3 className="text-2xl font-bold text-white">Autonomous insight workspace</h3>
+                </div>
+                <span className="text-xs font-semibold text-[#14FFEC] bg-[#14FFEC]/10 border border-[#14FFEC]/40 px-3 py-1 rounded-full">
+                    Powered by your data
+                </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+                <div className="flex flex-col gap-2">
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Metric focus</p>
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                        {numericColumns.map(([name]) => (
+                            <button
+                                key={name}
+                                onClick={() => setActiveMetric(name)}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeMetric === name ? 'bg-[#14FFEC] text-black shadow-lg shadow-[#14FFEC]/40' : 'bg-[#1f1f1f] text-gray-300 hover:bg-[#2c2c2c]'}`}
+                            >
+                                {name}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {categoricalColumns.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                        <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Compare by</p>
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                            {categoricalColumns.map(([name]) => (
+                                <button
+                                    key={name}
+                                    onClick={() => setActiveSegment(name)}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${activeSegment === name ? 'border border-[#14FFEC] text-white' : 'border border-transparent text-gray-400 hover:text-white'}`}
+                                >
+                                    {name}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {temporalKey && (
+                    <div className="flex flex-col gap-2">
+                        <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Time window</p>
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                            {LIVE_TIME_WINDOWS.map(window => (
+                                <button
+                                    key={window.id}
+                                    onClick={() => setTimeframe(window.id)}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${timeframe === window.id ? 'bg-white text-black' : 'bg-[#202020] text-gray-300 hover:bg-[#2d2d2d]'}`}
+                                >
+                                    {window.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <div className="mt-6 grid lg:grid-cols-5 gap-4">
+                <div className="lg:col-span-3 bg-[#101010] border border-gray-800 rounded-xl p-4 flex flex-col">
+                    <div className="flex items-center justify-between text-sm text-gray-400">
+                        <span>{metricName}</span>
+                        <span>{timeframeLabel}</span>
+                    </div>
+                    <div className="flex items-end justify-between gap-2 h-40 mt-4">
+                        {chartSeries.length === 0 && (
+                            <p className="text-sm text-gray-500">No numeric values detected for this combination.</p>
+                        )}
+                        {chartSeries.map((item, idx) => (
+                            <div key={`${item.name}-${idx}`} className="flex flex-col items-center flex-1">
+                                <div className="h-full flex items-end w-full">
+                                    <div
+                                        className={`w-full bg-gradient-to-t ${item.color} rounded-t-lg transition-all duration-500 ${leader?.name === item.name ? 'ring-2 ring-[#14FFEC]/80 ring-offset-2 ring-offset-[#101010]' : ''}`}
+                                        style={{ height: `${Math.max(4, (item.total / chartPeak) * 100)}%` }}
+                                        aria-label={`${item.name} ${formatValue(item.total)}`}
+                                    ></div>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-2 truncate w-full text-center" title={item.name}>{item.name}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
+                        {chartSeries.map((item, idx) => (
+                            <div key={`card-${item.name}-${idx}`} className="bg-[#1b1b1b] rounded-lg p-3 border border-gray-800">
+                                <p className="text-[11px] text-gray-500 truncate" title={item.name}>{item.name}</p>
+                                <p className="text-lg font-semibold text-white">{formatValue(item.total)}</p>
+                                <span className={`text-[11px] ${item.delta >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                                    {item.delta >= 0 ? '+' : ''}{item.delta.toFixed(1)}% vs peer avg
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="lg:col-span-2 space-y-4">
+                    <div className="bg-[#101010] border border-gray-800 rounded-xl p-4">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-lg font-semibold text-white">Segment spotlight</h4>
+                            <span className="text-xs text-gray-500">Drilldown ready</span>
+                        </div>
+                        {leader ? (
+                            <>
+                                <p className="text-3xl font-bold text-[#14FFEC] mt-3">{leader.name}</p>
+                                <p className="text-sm text-gray-300">{formatValue(leader.total)} · {metricName}</p>
+                                {laggard && (
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        Δ vs {laggard.name}: {formatValue(leader.total - laggard.total)}
+                                    </p>
+                                )}
+                            </>
+                        ) : (
+                            <p className="text-sm text-gray-400 mt-3">Waiting for a categorical column to compare segments.</p>
+                        )}
+                    </div>
+                    <div className="bg-[#101010] border border-gray-800 rounded-xl p-4 flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-lg font-semibold text-white">Autonomous insight</h4>
+                            <button className="text-xs text-[#14FFEC] hover:underline">Share</button>
+                        </div>
+                        <p className="text-sm text-gray-300 flex-1">{insightCopy}</p>
+                        <div className="text-xs text-gray-500 space-y-1">
+                            <p>Records analysed · {recordsAnalyzed}</p>
+                            <p>Coverage · {coverage !== null ? `${coverage.toFixed(1)}%` : 'N/A'}</p>
+                            <p>Total · {formatValue(summaryValues.total)} · Avg · {formatValue(summaryValues.avg)}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {[{
+                    label: `Total ${metricName}`,
+                    value: formatValue(summaryValues.total),
+                    helper: `${recordsAnalyzed.toLocaleString()} rows analysed`
+                }, {
+                    label: `Average ${metricName}`,
+                    value: formatValue(summaryValues.avg),
+                    helper: 'Rolling mean for selected timeframe'
+                }, {
+                    label: 'Total records',
+                    value: summaryValues.count.toLocaleString(),
+                    helper: coverage !== null ? `Coverage ${coverage.toFixed(1)}%` : 'Coverage pending'
+                }].map((card, idx) => (
+                    <div key={`summary-card-${idx}`} className="relative rounded-2xl bg-gradient-to-b from-[#1b1b1b] to-[#101010] border border-gray-800 p-4 shadow-inner shadow-black/60">
+                        <div className="absolute inset-x-4 top-3 h-1 rounded-full bg-gradient-to-r from-[#14FFEC] to-transparent opacity-50"></div>
+                        <p className="text-xs uppercase tracking-[0.25em] text-gray-500">{card.label}</p>
+                        <p className="text-3xl md:text-4xl font-extrabold text-[#14FFEC] mt-4">{card.value}</p>
+                        <p className="text-xs text-gray-400 mt-3">{card.helper}</p>
+                    </div>
+                ))}
+            </div>
+
+            {featuredCharts.length > 0 && (
+                <div className="mt-8 border-t border-gray-800 pt-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Live chart deck</p>
+                            <h4 className="text-xl font-semibold text-white">Visual intelligence preview</h4>
+                        </div>
+                        <span className="text-xs text-gray-500">{featuredCharts.length} selected</span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        {featuredCharts.map(chart => (
+                            <div key={`spotlight-chart-${chart.id}`} className="bg-[#101010] border border-gray-800 rounded-xl p-4 shadow-xl shadow-black/30">
+                                <div className="flex items-start justify-between mb-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-white">{chart.title}</p>
+                                        {chart.insight && <p className="text-xs text-gray-500 mt-1">{chart.insight}</p>}
+                                    </div>
+                                    {chart.filter?.values?.length > 0 && (
+                                        <span className="text-[10px] text-[#14FFEC] bg-[#14FFEC]/10 px-2 py-1 rounded-full">Filtered</span>
+                                    )}
+                                </div>
+                                <div className="h-48">
+                                    <ChartComponent config={chart} data={data} ChartJS={ChartJS} onDrilldown={onDrilldown} />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
 const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidgets, loading, ChartJS, activeDrilldown, onDrilldown, onResetDrilldown, onShowChartBuilder, onShowShare, onRemoveWidget, onOpenFilterModal, onSave, currentDashboardId, addToLog, isReadOnly, onNewDashboard, onShowHistory }) => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [draggedItem, setDraggedItem] = useState(null);
+    const featuredCharts = useMemo(() => widgets.filter(w => w.type === 'chart').slice(0, 2), [widgets]);
 
     const handleNameChange = (e) => {
         const oldName = dashboardName;
@@ -998,7 +1347,9 @@ const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidg
                 </div>
             </div>
             {activeDrilldown && <div className="mb-4"><PrimaryButton onClick={onResetDrilldown}>&larr; Back (Viewing {activeDrilldown.key}: {activeDrilldown.value})</PrimaryButton></div>}
-            
+
+            <LiveDataSpotlight data={data} featuredCharts={featuredCharts} ChartJS={ChartJS} onDrilldown={onDrilldown} />
+
             <div className="grid grid-cols-12 gap-6">
                  {widgets.map((rec, index) => {
                     if (rec.type === 'kpi') {

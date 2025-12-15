@@ -150,6 +150,7 @@ export default function App({ userData: externalUserData }) {
     const fileInputRef = useRef(null);
     const titleInputRef = useRef(null);
     const latestChatsRef = useRef([]);
+    const chatCreationPromiseRef = useRef(null);
 
     useEffect(() => {
         latestChatsRef.current = chats;
@@ -321,38 +322,55 @@ export default function App({ userData: externalUserData }) {
     };
 
     // Create a new chat, but only if there isn't already a new/empty chat
-    const handleNewChat = async (initialFileMessage = null) => {
-        // Only block if a visible chat (not deleted) is empty (no messages, no files, and no title)
-        const visibleChats = chats.filter(chat => !chat.deleted);
-        const hasEmptyChat = visibleChats.some(chat =>
-            (!chat.messages || chat.messages.length === 0) &&
-            (!chat.files || chat.files.length === 0) &&
-            (!chat.title || chat.title.trim() === '' || chat.title === 'New Conversation')
-        );
-        if (hasEmptyChat) {
-            showToast('Finish or delete the empty chat before creating a new one.', 'error');
-            return;
+    const handleNewChat = async () => {
+        if (chatCreationPromiseRef.current) {
+            return chatCreationPromiseRef.current;
         }
-        try {
-            const backendChat = await chatApi.createChat('New Conversation');
-            const newChatId = backendChat.id;
-            const newChat = { ...backendChat, messages: [], files: [], loaded: true, _lastTitleMsgIds: [] };
-            // If initial file message provided, upload file
-            if (initialFileMessage && initialFileMessage.file) {
-                await handleUploadFile(initialFileMessage.file.raw || initialFileMessage.file, newChatId, true);
-                newChat.messages.push({ id:`init-${Date.now()}`, sender:'user', file: initialFileMessage.file });
-                setShowDashboardHint(true);
+
+        const creationPromise = (async () => {
+            const currentChats = latestChatsRef.current || [];
+            const visibleChats = currentChats.filter(chat => !chat.deleted);
+            const hasEmptyChat = visibleChats.some(chat =>
+                (!chat.messages || chat.messages.length === 0) &&
+                (!chat.files || chat.files.length === 0) &&
+                (!chat.title || chat.title.trim() === '' || chat.title === 'New Conversation')
+            );
+
+            if (hasEmptyChat) {
+                showToast('Finish or delete the empty chat before creating a new one.', 'error');
+                const existingEmpty = visibleChats.find(chat =>
+                    (!chat.messages || chat.messages.length === 0) &&
+                    (!chat.files || chat.files.length === 0)
+                );
+                if (!activeChatId && existingEmpty) {
+                    setActiveChatId(existingEmpty.id);
+                }
+                return existingEmpty?.id || null;
             }
-            setChats(prevChats => {
-                // Deduplicate by id
-                const allChats = [newChat, ...prevChats];
-                return Array.from(new Map(allChats.map(c => [c.id, c])).values());
-            });
-            setActiveChatId(newChatId);
-            if(isMobile) setIsSidebarOpen(false);
-        } catch (e) {
-            console.error('Create chat failed', e);
-            showToast('Failed to create chat','error');
+
+            try {
+                const backendChat = await chatApi.createChat('New Conversation');
+                const newChatId = backendChat.id;
+                const newChat = { ...backendChat, messages: [], files: [], loaded: true, _lastTitleMsgIds: [] };
+                setChats(prevChats => {
+                    const allChats = [newChat, ...prevChats];
+                    return Array.from(new Map(allChats.map(c => [c.id, c])).values());
+                });
+                setActiveChatId(newChatId);
+                if(isMobile) setIsSidebarOpen(false);
+                return newChatId;
+            } catch (e) {
+                console.error('Create chat failed', e);
+                showToast('Failed to create chat','error');
+                return null;
+            }
+        })();
+
+        chatCreationPromiseRef.current = creationPromise;
+        try {
+            return await creationPromise;
+        } finally {
+            chatCreationPromiseRef.current = null;
         }
     };
 
@@ -380,8 +398,11 @@ export default function App({ userData: externalUserData }) {
         setIsSendingMessage(true);
         let chatId = activeChatId;
         if (!chatId) {
-            await handleNewChat();
-            return;
+            chatId = await handleNewChat();
+            if (!chatId) {
+                setIsSendingMessage(false);
+                return;
+            }
         }
         // Remove only truly-local empty chats (loaded === true and empty) to avoid dropping chats
         // that haven't been hydrated from the server yet. Use functional update to avoid stale state.
@@ -619,13 +640,14 @@ export default function App({ userData: externalUserData }) {
         });
     };
     
-    const handleFileUpload = (event) => {
+    const handleFileUpload = async (event) => {
         const file = event.target.files[0];
         if (!file) return;
 
         const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'];
         if (!allowedTypes.includes(file.type)) {
-            return showToast('Invalid file type. Please upload .xlsx or .csv files.', 'error');
+            showToast('Invalid file type. Please upload .xlsx or .csv files.', 'error');
+            return;
         }
 
         const fileData = {
@@ -635,19 +657,28 @@ export default function App({ userData: externalUserData }) {
             raw: file
         };
 
-        // If there is an active chat, upload to it. Otherwise, create a new chat with the file.
-        if (activeChatId) {
-            handleUploadFile(file, activeChatId);
-        } else {
-            const initialMessage = {
-                id: `msg-${Date.now()}`,
-                sender: 'user',
-                file: fileData,
-            };
-            handleNewChat(initialMessage);
+        let targetChatId = activeChatId;
+        if (!targetChatId) {
+            targetChatId = await handleNewChat();
+            if (!targetChatId) return;
         }
 
-        // Reset file input value to allow re-uploading the same file
+        const meta = await handleUploadFile(file, targetChatId);
+        if (meta) {
+            setShowDashboardHint(true);
+            appendMessages(targetChatId, [{
+                id: `file-${meta.id}`,
+                sender: 'user',
+                file: {
+                    name: meta.file_name || fileData.name,
+                    size: meta.file_size ? `${Math.round(meta.file_size / 1024)} KB` : fileData.size,
+                    type: meta.file_type || fileData.type,
+                    raw: file,
+                    meta
+                }
+            }]);
+        }
+
         if(fileInputRef.current) {
             fileInputRef.current.value = "";
         }
