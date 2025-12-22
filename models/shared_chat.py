@@ -10,6 +10,7 @@ class SharedChat(Base):
     __tablename__ = "shared_chats"
 
     id = Column(Integer, primary_key=True, index=True)
+    is_active = Column(Integer, default=1, nullable=False)  # 1 = active, 0 = deleted
     chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
     share_code = Column(
         String,

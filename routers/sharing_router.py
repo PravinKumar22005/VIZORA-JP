@@ -1,3 +1,4 @@
+from controllers import shared_chat_controller
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db import SessionLocal
@@ -8,6 +9,14 @@ from utils.jwt import get_current_user
 
 router = APIRouter()
 
+@router.delete("/chats/shared/permanent/{shared_chat_id}")
+def delete_shared_chat_permanently(
+    shared_chat_id: int,
+    user: User = Depends(get_current_user),
+):
+    return shared_chat_controller.delete_shared_chat_permanently(
+        user.id, shared_chat_id
+    )
 
 @router.post("/chats/{chat_id}/share")
 def share_chat(

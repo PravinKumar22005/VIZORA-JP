@@ -1,10 +1,13 @@
 # --- Imports ---
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
+from controllers import dashboard_controller
+
+
 from sqlalchemy.orm import Session
 from db import get_db
 from models.user import User
 from utils.jwt import get_current_user
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 import random, string
 from models.dashboard import SharedDashboard, Dashboard
@@ -38,6 +41,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 class DashboardCreate(BaseModel):
     dashboard_json: list
     dashboard_name: str
+    file_ids: Optional[List[int]] = None
 
 
 class ShareDashboardRequest(BaseModel):
@@ -63,6 +67,26 @@ class DashboardResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+@router.delete("/permanent/{dashboard_id}")
+def delete_dashboard_permanently(
+    dashboard_id: int,
+    user: User = Depends(get_current_user),
+):
+    return dashboard_controller.delete_dashboard_permanently(user.id, dashboard_id)
+
+
+# SharedDashboard permanent delete
+@router.delete("/shared/permanent/{shared_dashboard_id}")
+def delete_shared_dashboard_permanently(
+    shared_dashboard_id: int,
+    user: User = Depends(get_current_user),
+):
+    return dashboard_controller.delete_shared_dashboard_permanently(
+        user.id, shared_dashboard_id
+    )
+
 
 @router.post("/ingest-link", response_model=IngestLinkResponse)
 def ingest_file_from_link(
@@ -107,7 +131,9 @@ def ingest_file_from_link(
                 ]
                 num_rows = len(df)
                 num_columns = len(df.columns)
-                summary_stats = df.describe(include="all").to_dict() if not df.empty else None
+                summary_stats = (
+                    df.describe(include="all").to_dict() if not df.empty else None
+                )
         except Exception:
             pass  # Metadata extraction is best-effort
 
@@ -210,15 +236,13 @@ def create_dashboard(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    dashboard = Dashboard(
+    return dashboard_controller.create_dashboard(
+        db=db,
         user_id=user.id,
         dashboard_name=payload.dashboard_name,
         dashboard_json=payload.dashboard_json,
+        file_ids=payload.file_ids,
     )
-    db.add(dashboard)
-    db.commit()
-    db.refresh(dashboard)
-    return dashboard
 
 
 @router.get("", response_model=List[DashboardResponse])
@@ -284,6 +308,6 @@ def delete_dashboard(
     )
     if not dashboard:
         raise HTTPException(status_code=404, detail="Dashboard not found")
-    db.delete(dashboard)
+    dashboard.deleted = 1
     db.commit()
-    return {"detail": "Deleted"}
+    return {"detail": "Soft deleted"}

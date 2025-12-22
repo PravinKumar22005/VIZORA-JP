@@ -1,4 +1,4 @@
-from typing import List
+from typing import Optional
 
 from fastapi import HTTPException
 
@@ -6,6 +6,46 @@ from db import SessionLocal
 from models.chat import Chat
 from models.file_metadata import FileMetadata
 from models.message import Message
+
+
+def update_chat_is_active(user_id: int, chat_id: int, is_active: int):
+    db = SessionLocal()
+    try:
+        chat = (
+            db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == user_id).first()
+        )
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        chat.is_active = is_active
+        db.commit()
+        db.refresh(chat)
+        return {"id": chat.id, "is_active": chat.is_active}
+    finally:
+        db.close()
+
+
+def update_chat(user_id: int, chat_id: int, title: str = None, is_active: int = None):
+    db = SessionLocal()
+    try:
+        chat = (
+            db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == user_id).first()
+        )
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        updated = False
+        if title is not None:
+            chat.title = title
+            updated = True
+        if is_active is not None:
+            chat.is_active = is_active
+            updated = True
+        if not updated:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        db.commit()
+        db.refresh(chat)
+        return {"id": chat.id, "title": chat.title, "is_active": chat.is_active}
+    finally:
+        db.close()
 
 
 def create_chat(user_id: int, title: str):
@@ -25,12 +65,55 @@ def list_chats(user_id: int):
     try:
         chats = (
             db.query(Chat)
-            .filter(Chat.user_id == user_id)
+            .filter(Chat.user_id == user_id, Chat.is_active == 1)
             .order_by(Chat.created_at.desc())
             .all()
         )
+        # Deduplicate by chat id (should not be needed, but extra safety)
+        seen = set()
+        unique_chats = []
+        for c in chats:
+            if c.id not in seen:
+                seen.add(c.id)
+                unique_chats.append(c)
         return [
-            {"id": c.id, "title": c.title, "created_at": c.created_at} for c in chats
+            {
+                "id": c.id,
+                "title": c.title,
+                "created_at": c.created_at,
+                "is_active": c.is_active,
+            }
+            for c in unique_chats
+        ]
+    finally:
+        db.close()
+
+
+# NEW: List deleted chats (is_active == 0)
+def list_deleted_chats(user_id: int):
+    db = SessionLocal()
+    try:
+        chats = (
+            db.query(Chat)
+            .filter(Chat.user_id == user_id, Chat.is_active == 0)
+            .order_by(Chat.created_at.desc())
+            .all()
+        )
+        # Deduplicate by chat id (extra safety)
+        seen = set()
+        unique_chats = []
+        for c in chats:
+            if c.id not in seen:
+                seen.add(c.id)
+                unique_chats.append(c)
+        return [
+            {
+                "id": c.id,
+                "title": c.title,
+                "created_at": c.created_at,
+                "is_active": c.is_active,
+            }
+            for c in unique_chats
         ]
     finally:
         db.close()
@@ -40,7 +123,9 @@ def add_message(user_id: int, chat_id: int, text: str, sender: str):
     db = SessionLocal()
     try:
         chat = (
-            db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == user_id).first()
+            db.query(Chat)
+            .filter(Chat.id == chat_id, Chat.user_id == user_id, Chat.is_active == 1)
+            .first()
         )
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
@@ -62,7 +147,9 @@ def get_messages(user_id: int, chat_id: int):
     db = SessionLocal()
     try:
         chat = (
-            db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == user_id).first()
+            db.query(Chat)
+            .filter(Chat.id == chat_id, Chat.user_id == user_id, Chat.is_active == 1)
+            .first()
         )
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
@@ -127,11 +214,14 @@ def add_file_metadata(
     finally:
         db.close()
 
+
 def list_file_metadata(user_id: int, chat_id: int):
     db = SessionLocal()
     try:
         chat = (
-            db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == user_id).first()
+            db.query(Chat)
+            .filter(Chat.id == chat_id, Chat.user_id == user_id, Chat.is_active == 1)
+            .first()
         )
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")

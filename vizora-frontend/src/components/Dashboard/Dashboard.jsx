@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { dashboardApi } from '../../services/dashboardApi';
-import axios from 'axios';
-
+import logoGif from '../../assets/logo.gif';
 
 
 // --- HELPER FUNCTIONS & MOCK API ---
@@ -41,84 +41,106 @@ const calculateDataQuality = (data) => {
         }
 
         report[header] = {
-            type: type,
-            missingCount: missingCount,
+            type,
+            missingCount,
             missingPercentage: ((missingCount / data.length) * 100).toFixed(2),
             uniqueCount: uniqueValues.size,
             mean: mean ? mean.toFixed(2) : 'N/A',
-            min: min,
-            max: max,
-            outlierCount: outlierCount
+            min,
+            max,
+            outlierCount
         };
     });
+
     return report;
 };
-// eslint-disable-next-line no-unused-vars
-const DashboardsSidebar = ({ sidebarOpen, setSidebarOpen, dashboardsLoading, userDashboards, setIsReadOnly, setDashboardName, setCleanedData, setOriginalData, setAppState }) => {
-    // Overlay for mobile/desktop when sidebar is open
-    return (
-        <>
-            {/* Toggle button, always visible in top left */}
-            <button
-                className="fixed top-4 left-4 z-50 bg-[#232323] text-[#14FFEC] rounded-full p-2 shadow-lg hover:bg-[#323232] focus:outline-none"
-                onClick={() => setSidebarOpen((open) => !open)}
-                aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-            >
-                {sidebarOpen ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-                )}
-            </button>
-            {/* Overlay when sidebar is open (mobile/desktop) */}
-            {sidebarOpen && (
-                <div
-                    className="fixed inset-0 z-30 bg-black bg-opacity-40 md:hidden"
-                    onClick={() => setSidebarOpen(false)}
-                    aria-label="Close sidebar overlay"
-                />
-            )}
-            {/* Sidebar drawer */}
-            <aside
-                className={`fixed top-0 left-0 z-40 bg-[#232323] w-72 h-full min-h-screen p-6 flex flex-col gap-6 border-r border-gray-700 transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0`}
-                style={{ maxHeight: '100vh', overflowY: 'auto', boxShadow: sidebarOpen ? '2px 0 16px #0008' : 'none' }}
-            >
-                <div className="flex-1 flex flex-col">
-                    <h2 className="text-2xl font-bold mb-4 text-white flex items-center gap-2">
-                        <svg className="h-7 w-7 text-[#14FFEC]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V7" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 3H8a2 2 0 00-2 2v2h12V5a2 2 0 00-2-2z" /></svg>
-                        Dashboards
-                    </h2>
-                    {dashboardsLoading ? (
-                        <LoadingSpinner text="Loading dashboards..." />
-                    ) : userDashboards.length === 0 ? (
-                        <div className="text-gray-400">No dashboards found. Upload a file to create one.</div>
-                    ) : (
-                        <ul className="space-y-2 overflow-y-auto flex-1 pr-2 custom-scrollbar">
-                            {userDashboards.map(d => (
-                                <li
-                                    key={d.id}
-                                    className="bg-[#232323] rounded-lg p-4 flex items-center justify-between cursor-pointer hover:bg-[#0D7377] hover:text-white transition group border border-transparent hover:border-[#14FFEC] shadow-sm"
-                                    onClick={() => {
-                                        setIsReadOnly(false);
-                                        setDashboardName(d.dashboard_name);
-                                        setCleanedData(d.cleaned_data || []);
-                                        setOriginalData(d.cleaned_data || []);
-                                        setAppState('dashboard');
-                                        setSidebarOpen(false);
-                                        setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
-                                    }}
-                                >
-                                    <span className="font-semibold truncate max-w-[120px] group-hover:text-white" title={d.dashboard_name}>{d.dashboard_name}</span>
-                                    <span className="text-xs text-gray-400 ml-2 whitespace-nowrap">{new Date(d.created_at).toLocaleDateString()}<br/>{new Date(d.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-                <div className="mt-4 text-center text-xs text-gray-500">Click a dashboard to load it</div>
-            </aside>
-        </>
-    );
+
+const getGeminiChartRecommendations = async (metadata) => {
+    console.log("Sending metadata to Gemini for dashboard recommendations:", metadata);
+    await new Promise(resolve => setTimeout(resolve, 1500)); 
+
+    const recommendations = [];
+    if (!metadata || Object.keys(metadata).length === 0) return recommendations;
+    
+    const headers = Object.keys(metadata);
+    const numericColsAll = headers.filter(h => metadata[h].type === 'numeric');
+    const categoricalCols = headers.filter(h => metadata[h].type === 'categorical');
+    const temporalCols = headers.filter(h => metadata[h].type === 'temporal');
+
+    const numericKeywords = ['revenue', 'sales', 'amount', 'cost', 'profit', 'asset', 'liabilities', 'equity', 'value', 'price', 'quantity', 'count', 'total', 'income', 'expense', 'budget'];
+    const potentialKpiCols = headers.filter(h => metadata[h].type === 'numeric' && numericKeywords.some(k => h.toLowerCase().includes(k)));
+
+    potentialKpiCols.slice(0, 4).forEach(col => {
+        const isCurrency = ['price', 'revenue', 'cost', 'sales', 'amount', 'profit', 'income', 'expense'].some(k => col.toLowerCase().includes(k));
+        recommendations.push({
+            id: `kpi-${col}-sum`, type: 'kpi', title: `Total ${col}`, valueKey: col, calculation: 'sum',
+            prefix: isCurrency ? '$' : ''
+        });
+        recommendations.push({
+            id: `kpi-${col}-avg`, type: 'kpi', title: `Average ${col}`, valueKey: col, calculation: 'average',
+            prefix: isCurrency ? '$' : ''
+        });
+    });
+     if (categoricalCols.length > 0) {
+        recommendations.push({
+            id: 'kpi-total-rows', type: 'kpi', title: 'Total Records', value: Object.values(metadata)[0].missingCount + Object.values(metadata)[0].uniqueCount, calculation: 'value'
+        });
+    }
+
+    const primaryNumeric = potentialKpiCols[0] || numericColsAll[0];
+    const dateCol = temporalCols[0];
+    const primaryCategorical = categoricalCols.find(c => metadata[c].uniqueCount > 1 && metadata[c].uniqueCount < 20) || categoricalCols[0];
+    
+    if (dateCol && primaryNumeric) {
+        recommendations.push({
+            id: `chart-line-${primaryNumeric}`, type: 'chart', chartType: 'line', x_axis: dateCol, y_axis: primaryNumeric,
+            title: `${primaryNumeric} over Time`, defaultSort: 'asc', span: 'lg:col-span-2', forecast: true,
+            insight: `The trend for ${primaryNumeric} shows seasonal fluctuations with overall growth.`,
+            description: `Tracks the trend of '${primaryNumeric}' over time.`
+        });
+    }
+
+    if (primaryCategorical && primaryNumeric) {
+        const secondaryCategorical = categoricalCols.find(c => c !== primaryCategorical && metadata[c].uniqueCount > 1 && metadata[c].uniqueCount < 5);
+        if (secondaryCategorical) {
+             recommendations.push({
+                id: `chart-bar-stacked-${primaryNumeric}`, type: 'chart', chartType: 'bar', x_axis: primaryCategorical, y_axis: primaryNumeric, stack_by: secondaryCategorical,
+                title: `${primaryNumeric} by ${primaryCategorical} (by ${secondaryCategorical})`, defaultSort: 'desc', span: 'lg:col-span-2',
+                insight: `The composition of ${primaryNumeric} varies significantly across different ${secondaryCategorical} segments.`,
+                description: `A stacked bar chart showing the breakdown of ${primaryNumeric} for each ${primaryCategorical}.`
+            });
+        } else {
+             recommendations.push({
+                id: `chart-bar-${primaryNumeric}`, type: 'chart', chartType: 'bar', x_axis: primaryCategorical, y_axis: primaryNumeric,
+                title: `Total ${primaryNumeric} by ${primaryCategorical}`, defaultSort: 'desc', span: 'lg:col-span-1',
+                insight: `Category '${primaryCategorical}' has the highest impact on ${primaryNumeric}.`,
+                description: `Compares total ${primaryNumeric} across different categories of ${primaryCategorical}.`
+            });
+        }
+    }
+    
+    if (primaryCategorical) {
+        recommendations.push({
+            id: `chart-pie-${primaryCategorical}`, type: 'chart', chartType: 'pie', x_axis: primaryCategorical, y_axis: null,
+            title: `Distribution of ${primaryCategorical}`, defaultSort: 'desc', span: 'lg:col-span-1',
+            insight: `The dataset is dominated by a few key segments in ${primaryCategorical}.`,
+            description: `Shows the proportion of each category in '${primaryCategorical}'.`
+        });
+    }
+    
+    if (numericColsAll.length >= 2) {
+        const otherNumeric = numericColsAll.find(c => c !== primaryNumeric);
+        if (otherNumeric) {
+            recommendations.push({
+                id: `chart-scatter-${primaryNumeric}`, type: 'chart', chartType: 'scatter', x_axis: primaryNumeric, y_axis: otherNumeric,
+                title: `Correlation between ${primaryNumeric} and ${otherNumeric}`, span: 'lg:col-span-2',
+                insight: `Shows the relationship between ${primaryNumeric} and ${otherNumeric}, highlighting potential correlations.`,
+                description: `A scatter plot to investigate the relationship between two numerical variables.`
+            });
+        }
+    }
+
+    return recommendations;
 };
 
 const getChartSuggestionsForColumns = async (selectedColumnsMetadata) => {
@@ -190,7 +212,14 @@ const ChartIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className
 const TableIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>;
 const ExportIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>;
 const InfoIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>;
-const NewFileIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>;
+const NewDashboardIcon = ({className}) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" width={24} height={24} fill={"currentColor"} viewBox="0 0 24 24">
+        <path className="db-1" d="m20,11h-6c-.55,0-1,.45-1,1v8c0,.55.45,1,1,1h6c.55,0,1-.45,1-1v-8c0-.55-.45-1-1-1Zm-1,8h-4v-6h4v6Z"></path>
+        <path className="db-2" d="m10,15h-6c-.55,0-1,.45-1,1v4c0,.55.45,1,1,1h6c.55,0,1-.45,1-1v-4c0-.55-.45-1-1-1Zm-1,4h-4v-2h4v2Z"></path>
+        <path className="db-3" d="m20,3h-6c-.55,0-1,.45-1,1v4c0,.55.45,1,1,1h6c.55,0,1-.45,1-1v-4c0-.55-.45-1-1-1Zm-1,4h-4v-2h4v2Z"></path>
+        <path className="db-4" d="m10,3h-6c-.55,0-1,.45-1,1v8c0,.55.45,1,1,1h6c.55,0,1-.45,1-1V4c0-.55-.45-1-1-1Zm-1,8h-4v-6h4v6Z"></path>
+    </svg>
+);
 const ArrowUpIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7"/></svg>;
 const ArrowDownIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>;
 const ShareIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12s-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.368a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z"/></svg>;
@@ -198,19 +227,66 @@ const ChatIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className=
 const EditIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>;
 const CheckCircleIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
 const ActivityIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>;
-const TrashIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>;
-const FilterIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>;
-const EyeIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
+const TrashIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><g className="trash-lid"><path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18" /></g><g className="trash-can"><path strokeLinecap="round" strokeLinejoin="round" d="M19 6v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" /></g></svg>;
+const FilterIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>;
+const EyeIcon = ({className}) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <g className="eye-parts">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+        </g>
+        <path className="eye-slash" strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" strokeDasharray="25.5" strokeDashoffset="25.5" />
+    </svg>
+);
+const SettingsIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
+const UserIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>;
+const KeyIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H5v-2H3v-2H1v-4a6 6 0 016-6h4a6 6 0 016 6z" /></svg>;
+const LogoutIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <g className="logout-arrow"><path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7" /></g>
+    <path className="logout-door" strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+</svg>;
+const ChatbotIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg>;
+const HistoryIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+const WarningIcon = ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>;
+const ArrowLeftIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>;
+const MenuIcon=({className})=><svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>;
 
 
 // --- REUSABLE COMPONENTS ---
 const LoadingSpinner=({text="Processing..."})=><div className="flex flex-col items-center justify-center space-y-2"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#14FFEC]"></div><p className="text-[#14FFEC] text-sm font-semibold">{text}</p></div>;
 const PrimaryButton=({onClick,children,className='',disabled=false})=><button onClick={onClick} disabled={disabled} className={`bg-[#0D7377] text-white font-bold py-2 px-6 rounded-lg shadow-lg hover:bg-opacity-80 transition-all duration-300 disabled:bg-gray-500 disabled:cursor-not-allowed transform hover:scale-105 ${className}`}>{children}</button>;
 const Panel=({children,className=''})=><div className={`bg-[#323232] rounded-xl shadow-2xl p-6 md:p-8 ${className}`}>{children}</div>;
-const Modal=({isOpen,onClose,title,children, size = 'md'})=>{
+const Modal=({isOpen,onClose,title,children, size = 'md', className=''})=>{
     if(!isOpen)return null;
     const sizeClasses = { 'md': 'max-w-md', 'lg': 'max-w-2xl', 'xl': 'max-w-4xl' };
-    return(<div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4" onClick={onClose}><div className={`bg-[#323232] rounded-xl shadow-2xl w-full ${sizeClasses[size]}`} onClick={e=>e.stopPropagation()}><div className="p-6 border-b border-gray-700 flex justify-between items-center"><h2 className="text-2xl font-bold text-[#14FFEC]">{title}</h2><button onClick={onClose} className="text-gray-400 hover:text-white text-3xl">&times;</button></div><div className="p-6">{children}</div></div></div>);
+    return(<div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4" onClick={onClose}><div className={`bg-[#323232] rounded-xl shadow-2xl w-full ${sizeClasses[size]} ${className}`} onClick={e=>e.stopPropagation()}><div className="p-6 border-b border-gray-700 flex justify-between items-center"><h2 className="text-2xl font-bold text-[#14FFEC]">{title}</h2><button onClick={onClose} className="text-gray-400 hover:text-white text-3xl">&times;</button></div><div className="p-6">{children}</div></div></div>);
+};
+const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirmText = "Confirm", isDestructive = true }) => {
+    if (!isOpen) return null;
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={title}>
+            <div className="flex items-start gap-4">
+                <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                    <WarningIcon className="h-6 w-6 text-red-600" aria-hidden="true" />
+                </div>
+                <div>
+                    <h3 className="text-lg leading-6 font-medium text-white">{title}</h3>
+                    <div className="mt-2">
+                        <p className="text-sm text-gray-300">{message}</p>
+                    </div>
+                </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-4">
+                <button onClick={onClose} className="font-bold py-2 px-6 rounded-lg hover:bg-opacity-80 transition-all duration-300 bg-gray-600 text-white">Cancel</button>
+                <button 
+                    onClick={() => { onConfirm(); onClose(); }} 
+                    className={`font-bold py-2 px-6 rounded-lg hover:bg-opacity-80 transition-all duration-300 ${isDestructive ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-[#0D7377] hover:bg-[#0b5c5f] text-white'}`}
+                >
+                    {confirmText}
+                </button>
+            </div>
+        </Modal>
+    );
 };
 const InsightBox = ({ text }) => {
     if(!text) return null;
@@ -223,15 +299,20 @@ const InsightBox = ({ text }) => {
 };
 
 // --- APP SCREENS & MAJOR COMPONENTS ---
-const FileUploadScreen = ({ onFileProcessed, XLSX, onShowViewShared }) => {
+const FileUploadScreen = ({ onFileProcessed, XLSX, onShowViewShared, onShowHistory }) => {
     const [dragging, setDragging] = useState(false);
     const [error, setError] = useState('');
     const [showGoogleSheetModal, setShowGoogleSheetModal] = useState(false);
     const [sheetUrl, setSheetUrl] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30MB
 
     const processFile = (file) => {
         if (!file) return;
+        if (file.size > MAX_FILE_SIZE) {
+            setError(`File size cannot exceed ${MAX_FILE_SIZE / (1024 * 1024)}MB.`);
+            return;
+        }
         if (!['.csv', '.xlsx', '.xls'].some(ext => file.name.toLowerCase().endsWith(ext))) {
             setError('Invalid file type. Please upload a CSV or Excel file.');
             return;
@@ -263,54 +344,33 @@ const FileUploadScreen = ({ onFileProcessed, XLSX, onShowViewShared }) => {
     const handleConnectGoogleSheet = async () => {
         if (!sheetUrl) { alert('Please enter a Google Sheet URL.'); return; }
         setIsLoading(true);
+        setError('');
         try {
-            // eslint-disable-next-line no-unused-vars
             const proxyUrl = 'https://api.allorigins.win/raw?url=';
-            let fetchUrl = '';
-            // eslint-disable-next-line no-unused-vars
-            let parseType = 'csv';
-            let fileName = 'Imported Data';
-            // Google Sheets
-            const sheetMatch = sheetUrl.match(/docs.google.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-            if (sheetMatch) {
-                const sheetId = sheetMatch[1];
-                fetchUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-                fileName = 'Google Sheet Data';
-            } else if (/drive.google.com\/file\/d\//.test(sheetUrl)) {
-                // Google Drive direct download
-                const driveMatch = sheetUrl.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
-                if (!driveMatch) throw new Error('Invalid Google Drive file link.');
-                const fileId = driveMatch[1];
-                fetchUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-                fileName = 'Google Drive File';
-                // eslint-disable-next-line no-unused-vars
-                // eslint-disable-next-line no-unused-vars
-                parseType = 'auto';
-            } else if (/^https?:\/\//.test(sheetUrl)) {
-                // Any direct file link
-                fetchUrl = sheetUrl;
-                fileName = 'Remote File';
-                parseType = 'auto';
-            } else {
-                throw new Error('Unsupported or invalid link format.');
-            }
+            const sheetIdRegex = /\/d\/([a-zA-Z0-9-_]+)/;
+            const match = sheetUrl.match(sheetIdRegex);
+            if (!match) throw new Error("Invalid Google Sheet URL format.");
+            const sheetId = match[1];
+            const targetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
 
-            // Instead of parsing in browser, send to backend ingest-link endpoint
-            const token = localStorage.getItem('token');
-            const ingestRes = await axios.post(
-                'http://localhost:8000/dashboard/ingest-link',
-                { url: fetchUrl, file_name: fileName },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
-            if (!ingestRes.data || !ingestRes.data.bucket_path) {
-                throw new Error('Backend failed to ingest file.');
+            const response = await fetch(proxyUrl + encodeURIComponent(targetUrl));
+            if(!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
+            const text = await response.text();
+
+            if (text.length > MAX_FILE_SIZE) {
+                throw new Error(`Google Sheet data is too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB.`);
             }
+            
+            const workbook = XLSX.read(text, { type: 'string', raw: true });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet);
+            
+            onFileProcessed(jsonData, "Google Sheet Data");
             setShowGoogleSheetModal(false);
-            setError('File ingested and metadata saved! You can now use it in your dashboards.');
-            // Optionally: trigger dashboard list refresh or show a success modal
         } catch (err) {
-            console.error('Failed to fetch Google Sheet/Drive/File:', err);
-            setError('Failed to fetch or parse data. Ensure the link is public and points to a valid dataset.\n' + (err.message || err));
+            console.error('Failed to fetch Google Sheet:', err);
+            setError(err.message || 'Failed to fetch data. Ensure the link is public ("Anyone with the link can view").');
         } finally {
             setIsLoading(false);
         }
@@ -334,36 +394,40 @@ const FileUploadScreen = ({ onFileProcessed, XLSX, onShowViewShared }) => {
     }
 
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen p-4" onDragEnter={e => handleDragEvents(e, true)} onDragLeave={e => handleDragEvents(e, false)} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
-            <Modal isOpen={showGoogleSheetModal} onClose={() => setShowGoogleSheetModal(false)} title="Connect to Google Sheet">
-                <p className="text-gray-300 mb-4">Enter the public URL of your Google Sheet. Make sure sharing is set to "Anyone with the link".</p>
-                <input type="text" value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} placeholder="https://docs.google.com/..." className="w-full p-2 bg-[#212121] border border-gray-600 rounded-lg text-white mb-4"/>
-                <PrimaryButton onClick={handleConnectGoogleSheet} className="w-full">Connect</PrimaryButton>
-            </Modal>
-            <h1 className="text-5xl font-extrabold text-white mb-2">Vizora</h1>
-            <h2 className="text-xl font-light text-[#14FFEC] mb-8">Data Cleaning Wizard & Visualization Dashboard</h2>
-            <Panel className="w-full max-w-2xl text-center">
-                <input type="file" id="file-upload" className="hidden" accept=".csv, .xlsx, .xls" onChange={e => processFile(e.target.files[0])}/>
-                <label htmlFor="file-upload" className={`flex flex-col items-center justify-center w-full h-64 border-4 border-dashed rounded-lg cursor-pointer transition-colors duration-300 ${dragging ? 'border-[#14FFEC] bg-[#3a3a3a]' : 'border-gray-600 hover:border-gray-500'}`}>
-                    <UploadIcon/>
-                    <p className="mt-4 text-lg text-gray-400"><span className="font-semibold text-[#0D7377]">Click to upload</span> or drag and drop</p>
-                    <p className="text-sm text-gray-500">CSV, XLSX, or XLS files</p>
-                </label>
-                {error && <p className="text-red-400 mt-4">{error}</p>}
-                <div className="mt-4 text-center"><p className="text-gray-400">or</p><button onClick={() => setShowGoogleSheetModal(true)} className="mt-2 font-bold text-[#14FFEC] hover:underline">Connect to a Google Sheet</button></div>
-            </Panel>
-            <div className="mt-8 text-center">
-                <p className="text-gray-400">Have a share code?</p>
-                <button onClick={onShowViewShared} className="mt-2 font-bold text-[#14FFEC] hover:underline flex items-center gap-2 mx-auto">
-                    <EyeIcon className="h-5 w-5" />
-                    <span>View a Shared Dashboard</span>
-                </button>
+        <div className="relative min-h-screen">
+            <button onClick={onShowHistory} className="absolute top-6 right-6 p-3 bg-[#323232] rounded-full hover:bg-[#4a4a4a] transition-colors" title="View Dashboard History">
+                <HistoryIcon className="h-6 w-6 text-white"/>
+            </button>
+            <div className="flex flex-col items-center justify-center min-h-screen p-4" onDragEnter={e => handleDragEvents(e, true)} onDragLeave={e => handleDragEvents(e, false)} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
+                <Modal isOpen={showGoogleSheetModal} onClose={() => setShowGoogleSheetModal(false)} title="Connect to Google Sheet">
+                    <p className="text-gray-300 mb-4">Enter the public URL of your Google Sheet. Make sure sharing is set to "Anyone with the link".</p>
+                    <input type="text" value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} placeholder="https://docs.google.com/..." className="w-full p-2 bg-[#212121] border border-gray-600 rounded-lg text-white mb-4"/>
+                    <PrimaryButton onClick={handleConnectGoogleSheet} className="w-full">Connect</PrimaryButton>
+                </Modal>
+                <h1 className="text-5xl font-extrabold text-white mb-2">Vizora</h1>
+                <h2 className="text-xl font-light text-[#14FFEC] mb-8">Data Cleaning Wizard & Visualization Dashboard</h2>
+                <Panel className="w-full max-w-2xl text-center">
+                    <input type="file" id="file-upload" className="hidden" accept=".csv, .xlsx, .xls" onChange={e => processFile(e.target.files[0])}/>
+                    <label htmlFor="file-upload" className={`flex flex-col items-center justify-center w-full h-64 border-4 border-dashed rounded-lg cursor-pointer transition-colors duration-300 ${dragging ? 'border-[#14FFEC] bg-[#3a3a3a]' : 'border-gray-600 hover:border-gray-500'}`}>
+                        <UploadIcon/>
+                        <p className="mt-4 text-lg text-gray-400"><span className="font-semibold text-[#0D7377]">Click to upload</span> or drag and drop</p>
+                        <p className="text-sm text-gray-500">CSV, XLSX, or XLS files</p>
+                    </label>
+                    {error && <p className="text-red-400 mt-4">{error}</p>}
+                    <div className="mt-4 text-center"><p className="text-gray-400">or</p><button onClick={() => setShowGoogleSheetModal(true)} className="mt-2 font-bold text-[#14FFEC] hover:underline">Connect to a Google Sheet</button></div>
+                </Panel>
+                <div className="mt-8 text-center">
+                    <p className="text-gray-400">Have a share code?</p>
+                    <button onClick={onShowViewShared} className="mt-2 font-bold text-[#14FFEC] hover:underline flex items-center gap-2 mx-auto">
+                        <EyeIcon className="h-5 w-5" />
+                        <span>View a Shared Dashboard</span>
+                    </button>
+                </div>
             </div>
         </div>
     );
 };
 const AutoCleaningProgress = ({ data, onCleaningComplete, addToLog }) => {
-    // ... (This component remains largely unchanged but now calls addToLog)
     const initialDataWithIds = useMemo(() => data.map((row, index) => ({ ...row, __vizora_internal_id: index })), [data]);
 
     const [currentStep, setCurrentStep] = useState(-1);
@@ -378,7 +442,7 @@ const AutoCleaningProgress = ({ data, onCleaningComplete, addToLog }) => {
         { title: "Remove Irrelevant or Redundant Data", description: "Consolidating duplicates.", action: (d) => { const changes = []; const seen = new Set(); const uniqueData = d.filter(row => { const { __vizora_internal_id, ...rowData } = row; const stringified = JSON.stringify(rowData); if (seen.has(stringified)) { changes.push({ id: row.__vizora_internal_id, type: 'duplicate' }); return false; } seen.add(stringified); return true; }); return { data: uniqueData, changes, summary: `Consolidated ${changes.length} duplicates.` }; } },
         { title: "Correct Structural Errors", description: "Fixing whitespace.", action: (d) => { const changes = []; const newData = d.map(row => { const newRow = { ...row }; Object.keys(newRow).forEach(key => { if (key !== '__vizora_internal_id' && typeof newRow[key] === 'string' && newRow[key].trim() !== newRow[key]) { changes.push({ id: row.__vizora_internal_id, key, before: newRow[key], after: newRow[key].trim(), type: 'correction' }); newRow[key] = newRow[key].trim(); } }); return newRow; }); return { data: newData, changes, summary: `Applied ${changes.length} structural corrections.` }; } },
         { title: "Handle Missing Data", description: "Filling empty cells using mean/mode.", action: (d) => { const changes = []; const newData = JSON.parse(JSON.stringify(d)); const headers = Object.keys(newData[0] || {}).filter(h => h !== '__vizora_internal_id'); headers.forEach(h => { const existingValues = d.map(r => r[h]).filter(v => v != null && String(v).trim() !== ''); const isNumeric = existingValues.every(v => !isNaN(parseFloat(v)) && isFinite(v)); let fillValue; if (isNumeric) { const sum = existingValues.reduce((acc, v) => acc + parseFloat(v), 0); fillValue = existingValues.length > 0 ? (sum / existingValues.length) : 0; } else { const counts = existingValues.reduce((acc, v) => { acc[v] = (acc[v] || 0) + 1; return acc; }, {}); fillValue = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b, ''); } newData.forEach((row) => { if (row[h] == null || String(row[h]).trim() === '') { const finalFillValue = isNumeric ? parseFloat(fillValue.toFixed(2)) : fillValue; changes.push({ id: row.__vizora_internal_id, key: h, before: row[h], after: finalFillValue, type: 'filled' }); row[h] = finalFillValue; } }); }); return { data: newData, changes, summary: `Filled ${changes.length} missing values.` }; } },
-        { title: "Manage Outliers", description: "Capping extreme values.", action: (d) => { const changes = []; const newData = JSON.parse(JSON.stringify(d)); const numericCols = Object.keys(d[0] || {}).filter(h => h !== '__vizora_internal_id' && d.every(r => r[h] === null || !isNaN(parseFloat(r[h])))); numericCols.forEach(key => { const values = d.map(r => parseFloat(r[key])).filter(v => !isNaN(v)).sort((a, b) => a - b); const q1 = values[Math.floor(values.length / 4)]; const q3 = values[Math.floor((values.length * 3) / 4)]; const iqr = q3 - q1; const lowerBound = q1 - 1.5 * iqr; const upperBound = q3 + 1.5 * iqr; newData.forEach((row) => { const val = parseFloat(row[key]); if (val < lowerBound || val > upperBound) { const cappedVal = parseFloat(Math.max(lowerBound, Math.min(val, upperBound)).toFixed(2)); changes.push({ id: row.__vizora_internal_id, key, before: val, after: cappedVal, type: 'adjusted' }); row[key] = cappedVal; } }); }); return { data: newData, changes, summary: `Adjusted ${changes.length} outliers.` }; } },
+        { title: "Manage Outliers", description: "Capping extreme values.", action: (d) => { const changes = []; const newData = JSON.parse(JSON.stringify(d)); const numericCols = Object.keys(d[0] || {}).filter(h => h !== '__vizora_internal_id' && d.every(r => r[h] === null || !isNaN(parseFloat(r[h])))); numericCols.forEach(key => { const values = d.map(r => parseFloat(r[key])).filter(v => !isNaN(v)).sort((a, b) => a - b); const q1 = values[Math.floor(values.length / 4)]; const q3 = values[Math.floor(values.length * 3 / 4)]; const iqr = q3 - q1; const lowerBound = q1 - 1.5 * iqr; const upperBound = q3 + 1.5 * iqr; newData.forEach((row) => { const val = parseFloat(row[key]); if (val < lowerBound || val > upperBound) { const cappedVal = parseFloat(Math.max(lowerBound, Math.min(val, upperBound)).toFixed(2)); changes.push({ id: row.__vizora_internal_id, key, before: val, after: cappedVal, type: 'adjusted' }); row[key] = cappedVal; } }); }); return { data: newData, changes, summary: `Adjusted ${changes.length} outliers.` }; } },
         { title: "Validate & Verify Accuracy", description: "Final check for consistency.", action: (d) => ({ data: d, changes: [], summary: "Data validated." }) },
     ], []);
 
@@ -410,7 +474,6 @@ const AutoCleaningProgress = ({ data, onCleaningComplete, addToLog }) => {
         return () => clearTimeout(timer);
     }, [currentStep, cleaningSteps, currentData, addToLog]);
     
-    // ... (rest of the component JSX is unchanged)
     const isComplete = currentStep >= cleaningSteps.length;
     const headers = Object.keys(data[0] || {});
     const rowsToDisplay = useMemo(() => initialDataWithIds.filter(row => affectedRowIds.has(row.__vizora_internal_id)), [initialDataWithIds, affectedRowIds]);
@@ -500,7 +563,6 @@ const AutoCleaningProgress = ({ data, onCleaningComplete, addToLog }) => {
     );
 };
 const ManualCleaningWizard = ({ originalData, onCleaningComplete, addToLog }) => {
-    // ... (This component remains largely unchanged but now calls addToLog)
     const [step, setStep] = useState(0);
     const [data, setData] = useState(JSON.parse(JSON.stringify(originalData)));
     const [qualityReport, setQualityReport] = useState(null);
@@ -564,7 +626,7 @@ const ManualCleaningWizard = ({ originalData, onCleaningComplete, addToLog }) =>
         createLogAndSetData(uniqueData, { action: 'Remove Duplicates', details: `Removed ${initialCount - uniqueData.length} duplicate rows.` });
     };
 
-    const renderStepContent = () => { /* ... JSX for wizard steps is unchanged ... */  
+    const renderStepContent = () => {  
          switch(step) {
             case 0: return (<div><h3 className="text-2xl font-bold text-[#14FFEC] mb-4">Step 1: Data Quality Assessment</h3><p className="text-gray-300 mb-6">Review a summary of your dataset, including outliers detected via the IQR method.</p><div className="overflow-x-auto max-h-96"><table className="w-full text-left text-sm"><thead className="bg-[#2a2a2a] text-gray-300 uppercase"><tr><th className="p-3">Column</th><th className="p-3">Type</th><th className="p-3">Missing</th><th className="p-3">Unique</th><th className="p-3">Outliers</th></tr></thead><tbody>{qualityReport && Object.entries(qualityReport).map(([h, r]) => (<tr key={h} className="border-b border-gray-700"><td className="p-3 font-medium text-white">{h}</td><td className="p-3 capitalize">{r.type}</td><td className="p-3">{r.missingCount} ({r.missingPercentage}%)</td><td className="p-3">{r.uniqueCount}</td><td className="p-3">{r.type === 'numeric' ? r.outlierCount : 'N/A'}</td></tr>))}</tbody></table></div></div>);
             case 1: const textColumns = qualityReport ? Object.keys(qualityReport).filter(k => qualityReport[k].type === 'categorical') : []; return (<div><h3 className="text-2xl font-bold text-[#14FFEC] mb-4">Step 2: Structural Error Fixes</h3><p className="text-gray-300 mb-6">Standardize text data by trimming whitespace or changing case.</p><div className="space-y-4"><PrimaryButton onClick={handleTrimWhitespace}>Trim Whitespace (All Columns)</PrimaryButton><div className="flex items-center gap-4"><select onChange={e => setSelectedColumn(e.target.value)} defaultValue="" className="flex-grow p-2 bg-[#212121] border border-gray-600 rounded-lg text-white"><option value="">-- Select Text Column --</option>{textColumns.map(c => <option key={c} value={c}>{c}</option>)}</select><PrimaryButton onClick={() => handleChangeCase(selectedColumn, 'toUpperCase')} disabled={!selectedColumn}>UPPER</PrimaryButton><PrimaryButton onClick={() => handleChangeCase(selectedColumn, 'toLowerCase')} disabled={!selectedColumn}>lower</PrimaryButton></div></div></div>);
@@ -589,19 +651,24 @@ const ManualCleaningWizard = ({ originalData, onCleaningComplete, addToLog }) =>
         </div>
     );
 };
-const Dashboard = ({
-    db, appId, dashboardName, setDashboardName, cleanedData, setCleanedData,
-    onReset, libraries, addToLog, isReadOnly, onLoadShared, onShowViewShared,
-    userDashboards, dashboardsLoading, onSelectDashboard
-}) => {
+const Dashboard = ({ currentDashboardId, dashboardName, setDashboardName, cleanedData, setCleanedData, dashboardWidgets, setDashboardWidgets, onReset, onSave, libraries, addToLog, isReadOnly, onLoadShared, onShowViewShared, savedDashboards, onLoadDashboard, onRenameDashboard, onDeleteDashboard, onDeleteHistory, onLogout, onShowHistory }) => {
     const [activeTab, setActiveTab] = useState('dashboard');
-    const [dashboardWidgets, setDashboardWidgets] = useState([]);
-    const [loadingCharts, setLoadingCharts] = useState(true);
-    const [drilldownHistory, setDrilldownHistory] = useState([]); 
     const [showChartBuilderModal, setShowChartBuilderModal] = useState(false);
     const [showShareModal, setShowShareModal] = useState(false);
     const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(false);
+    const [loadingCharts, setLoadingCharts] = useState(!dashboardWidgets || dashboardWidgets.length === 0);
+    const [drilldownHistory, setDrilldownHistory] = useState([]); 
     const [filterModalState, setFilterModalState] = useState({ isOpen: false, widgetId: null });
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+    useEffect(() => {
+        const autoSave = setTimeout(() => {
+          if (!isReadOnly && currentDashboardId) { 
+            onSave();
+          }
+        }, 3000); // Increased delay to avoid rapid saves
+        return () => clearTimeout(autoSave);
+    }, [dashboardName, dashboardWidgets, cleanedData, isReadOnly, currentDashboardId, onSave]);
 
     const qualityReport = useMemo(() => calculateDataQuality(cleanedData), [cleanedData]);
     const headers = useMemo(() => cleanedData.length > 0 ? Object.keys(cleanedData[0]) : [], [cleanedData]);
@@ -612,22 +679,20 @@ const Dashboard = ({
         return cleanedData.filter(row => String(row[lastFilter.key]) === String(lastFilter.value));
     }, [cleanedData, drilldownHistory]);
 
-    // Dummy implementation for getGeminiChartRecommendations
-    const getGeminiChartRecommendations = async (metadata) => {
-        // For now, return an empty array or some mock recommendations
-        return [];
-    };
-
     useEffect(() => {
-        const fetchRecommendations = async () => {
-            setLoadingCharts(true);
-            const metadata = calculateDataQuality(filteredData);
-            const recommendations = await getGeminiChartRecommendations(metadata);
-            setDashboardWidgets(recommendations);
-            setLoadingCharts(false);
-        };
-        fetchRecommendations();
-    }, [filteredData]);
+        if (!dashboardWidgets || dashboardWidgets.length === 0) {
+            const fetchRecommendations = async () => {
+                setLoadingCharts(true);
+                const metadata = calculateDataQuality(filteredData);
+                const recommendations = await getGeminiChartRecommendations(metadata);
+                setDashboardWidgets(recommendations);
+                setLoadingCharts(false);
+            };
+            fetchRecommendations();
+        } else {
+             setLoadingCharts(false);
+        }
+    }, [filteredData, dashboardWidgets, setDashboardWidgets]);
     
     const handleDrilldown = (key, value) => {
         setDrilldownHistory(prev => [...prev, { key, value }]);
@@ -670,31 +735,45 @@ const Dashboard = ({
 
     return (
         <div className="flex h-screen overflow-hidden">
-            <Sidebar
-                activeTab={activeTab}
-                setActiveTab={setActiveTab}
-                onReset={onReset}
-                onToggleActivity={() => setIsActivityPanelOpen(p => !p)}
+            <Sidebar 
+                activeTab={activeTab} 
+                setActiveTab={setActiveTab} 
                 isReadOnly={isReadOnly}
                 onShowViewShared={onShowViewShared}
-                userDashboards={userDashboards}
-                dashboardsLoading={dashboardsLoading}
-                onSelectDashboard={onSelectDashboard}
+                onToggleActivity={() => setIsActivityPanelOpen(p => !p)}
+                onReset={onReset}
+                savedDashboards={savedDashboards}
+                onLoadDashboard={onLoadDashboard}
+                onRenameDashboard={onRenameDashboard}
+                onDeleteDashboard={onDeleteDashboard}
+                isCollapsed={isSidebarCollapsed}
+                onToggleCollapse={() => setIsSidebarCollapsed(p => !p)}
+                onDeleteHistory={onDeleteHistory}
+                onLogout={onLogout}
             />
             <main className={`flex-1 bg-[#212121] p-4 md:p-8 overflow-y-auto transition-all duration-300 ease-in-out ${isActivityPanelOpen && !isReadOnly ? 'mr-96' : ''}`}>
-                {activeTab === 'dashboard' && <DashboardView dashboardName={dashboardName} setDashboardName={setDashboardName} data={filteredData} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} loading={loadingCharts} ChartJS={libraries.ChartJS} activeDrilldown={drilldownHistory.length > 0 ? drilldownHistory[drilldownHistory.length-1] : null} onDrilldown={handleDrilldown} onResetDrilldown={handleResetDrilldown} onShowChartBuilder={() => setShowChartBuilderModal(true)} onShowShare={() => setShowShareModal(true)} onRemoveWidget={handleRemoveWidget} onOpenFilterModal={(widgetId) => setFilterModalState({ isOpen: true, widgetId })} addToLog={addToLog} isReadOnly={isReadOnly} />}
+                {activeTab === 'dashboard' && <DashboardView dashboardName={dashboardName} setDashboardName={setDashboardName} data={filteredData} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} loading={loadingCharts} ChartJS={libraries.ChartJS} activeDrilldown={drilldownHistory.length > 0 ? drilldownHistory[drilldownHistory.length-1] : null} onDrilldown={handleDrilldown} onResetDrilldown={handleResetDrilldown} onShowChartBuilder={() => setShowChartBuilderModal(true)} onShowShare={() => setShowShareModal(true)} onRemoveWidget={handleRemoveWidget} onOpenFilterModal={(widgetId) => setFilterModalState({ isOpen: true, widgetId })} onSave={onSave} currentDashboardId={currentDashboardId} addToLog={addToLog} isReadOnly={isReadOnly} onNewDashboard={onReset} onShowHistory={onShowHistory} />}
                 {activeTab === 'preview' && !isReadOnly && <DataPreview data={cleanedData} headers={headers} onDataEdit={handleDataEdit} />}
                 {activeTab === 'exports' && !isReadOnly && <Exports data={cleanedData} XLSX={libraries.XLSX} />}
             </main>
             {!isReadOnly && <ActivityPanel isOpen={isActivityPanelOpen} onClose={() => setIsActivityPanelOpen(false)} log={addToLog.log} />}
             {!isReadOnly && <ChartBuilderModal isOpen={showChartBuilderModal} onClose={() => setShowChartBuilderModal(false)} qualityReport={qualityReport} data={cleanedData} ChartJS={libraries.ChartJS} onAddChart={handleAddChart} />}
-            <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} stateToShare={{ cleanedData, headers, qualityReport, dashboardName }} db={db} appId={appId} />
+            <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} stateToShare={{ cleanedData, headers, qualityReport, dashboardName, dashboardWidgets }} />
             {filterModalState.isOpen && <FilterModal widget={currentFilteringWidget} data={cleanedData} onClose={() => setFilterModalState({ isOpen: false, widgetId: null })} onApplyFilter={handleApplyFilter} />}
         </div>
     );
 };
 // --- NESTED DASHBOARD COMPONENTS ---
-const Sidebar = ({ activeTab, setActiveTab, onReset, onToggleActivity, isReadOnly, onShowViewShared, userDashboards, dashboardsLoading, onSelectDashboard }) => { 
+const Sidebar = ({ activeTab, setActiveTab, isReadOnly, onShowViewShared, onToggleActivity, onReset, savedDashboards, onLoadDashboard, onRenameDashboard, onDeleteDashboard, isCollapsed, onToggleCollapse, onDeleteHistory, onLogout }) => { 
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isSettingsAnimating, setIsSettingsAnimating] = useState(false);
+    
+    const handleSettingsClick = () => {
+        setIsSettingsAnimating(true);
+        setIsSettingsOpen(true);
+        setTimeout(() => setIsSettingsAnimating(false), 500);
+    }
+    
     const navItems = isReadOnly ? [
         { id: 'dashboard', label: 'Dashboard', icon: ChartIcon },
     ] : [
@@ -702,55 +781,50 @@ const Sidebar = ({ activeTab, setActiveTab, onReset, onToggleActivity, isReadOnl
         { id: 'preview', label: 'Data Preview', icon: TableIcon },
         { id: 'exports', label: 'Exports', icon: ExportIcon },
     ];
-    return (<aside className="bg-[#323232] w-64 p-6 flex-shrink-0 flex flex-col justify-between"><div className="flex flex-col gap-8">
-        <div className="flex items-center gap-2">
-            <svg className="h-8 w-8 text-[#14FFEC]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5-10-5-10 5z"/></svg>
-            <h1 className="text-2xl font-bold text-white">Vizora</h1>
-        </div>
-        <nav className="flex flex-col gap-3">{navItems.map(item => (<button key={item.id} onClick={() => setActiveTab(item.id)} className={`flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full text-left ${activeTab === item.id ? 'bg-[#0D7377] text-white shadow-md' : 'text-gray-300 hover:bg-[#4a4a4a]'}`}><item.icon className="h-6 w-6 mr-3" /> <span>{item.label}</span></button>))}</nav>
-        
-        {/* --- ADDED DASHBOARD SESSION LIST --- */}
-        {!isReadOnly && userDashboards && (
-             <div className="mt-0">
-                <h3 className="text-xs uppercase text-gray-500 font-bold tracking-wider mb-3 px-3">Dashboard Sessions</h3>
-                <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
-                    {dashboardsLoading ? (
-                        <div className="text-gray-400 text-sm p-3">Loading sessions...</div>
-                    ) : userDashboards.length > 0 ? (
-                        userDashboards.map(d => (
-                            <button
-                                key={d.id}
-                                onClick={() => onSelectDashboard(d.id)}
-                                className="w-full text-left text-sm text-gray-300 p-3 rounded-lg hover:bg-[#4a4a4a] transition-colors truncate"
-                                title={d.dashboard_name}
-                            >
-                                {d.dashboard_name}
-                            </button>
-                        ))
-                    ) : (
-                        <div className="text-gray-400 text-sm p-3">No saved sessions.</div>
-                    )}
+    return (<>
+        <aside className={`bg-[#323232] p-6 flex-shrink-0 flex flex-col justify-between transition-all duration-300 ${isCollapsed ? 'w-24 items-center' : 'w-64'}`}>
+            <div className={`flex flex-col gap-8 flex-grow overflow-hidden ${isCollapsed ? 'w-full items-center' : ''}`}>
+                <div className={`flex items-center justify-between mb-8 w-full`}>
+                    <div className={`flex items-center gap-2 overflow-hidden transition-all duration-300 ${isCollapsed ? 'w-0' : 'w-auto'}`}>
+                        <div className="relative w-8 h-8 flex-shrink-0">
+                            <div className="w-8 h-8 bg-black rounded-full"></div>
+                            <img src={logoGif} alt="Vizora Logo" className="absolute inset-0 w-8 h-8 object-contain rounded-full" />
+                        </div>
+                        <h1 className="text-2xl font-bold text-white whitespace-nowrap">Vizora</h1>
+                    </div>
+                    <button onClick={onToggleCollapse} className="p-2 rounded-md hover:bg-[#4a4a4a]">
+                        <MenuIcon className="h-6 w-6 text-white"/>
+                    </button>
                 </div>
+                <nav className="flex flex-col gap-3 flex-shrink-0">{navItems.map(item => (<button key={item.id} title={isCollapsed ? item.label : ''} onClick={() => setActiveTab(item.id)} className={`flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full ${isCollapsed ? 'justify-center' : 'text-left'} ${activeTab === item.id ? 'bg-[#0D7377] text-white shadow-md' : 'text-gray-300 hover:bg-[#4a4a4a]'}`}><item.icon className="h-6 w-6 flex-shrink-0" /> <span className={`ml-3 whitespace-nowrap transition-all duration-200 ${isCollapsed ? 'w-0 opacity-0' : 'w-auto opacity-100'}`}>{item.label}</span></button>))}</nav>
+                {!isReadOnly && <DashboardHistoryList dashboards={savedDashboards} onLoad={onLoadDashboard} onRename={onRenameDashboard} onDelete={onDeleteDashboard} isCollapsed={isCollapsed} />}
             </div>
-        )}
-        {/* --- END ADDED SECTION --- */}
-
-        </div>
-        <div className="flex flex-col space-y-2">
-        {isReadOnly ? (
-            <button onClick={onReset} className="flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full text-left text-gray-300 hover:bg-[#4a4a4a]"><NewFileIcon className="h-6 w-6 mr-3" /><span>Create Your Own</span></button>
-        ) : (
-            <>
-                <button onClick={onShowViewShared} className="flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full text-left text-gray-300 hover:bg-[#4a4a4a]"><EyeIcon className="h-6 w-6 mr-3" /><span>View Shared</span></button>
-                <button onClick={onToggleActivity} className="flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full text-left text-gray-300 hover:bg-[#4a4a4a]"><ActivityIcon className="h-6 w-6 mr-3" /><span>Activity</span></button>
-                <button onClick={onReset} className="flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full text-left text-gray-300 hover:bg-[#4a4a4a]"><NewFileIcon className="h-6 w-6 mr-3" /><span>New Dataset</span></button>
-            </>
-        )}
-        </div>
-        </aside>);
+            
+            <div className="flex flex-col space-y-2 flex-shrink-0">
+                {isReadOnly ? (
+                    <button onClick={onReset} title={isCollapsed ? "Create Your Own" : ""} className={`flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full ${isCollapsed ? 'justify-center' : 'text-left'} text-gray-300 hover:bg-[#4a4a4a]`}><NewDashboardIcon className="h-6 w-6 flex-shrink-0" /><span className={`ml-3 whitespace-nowrap transition-all duration-200 ${isCollapsed ? 'w-0 opacity-0' : 'w-auto opacity-100'}`}>Create Your Own</span></button>
+                ) : (
+                    <>
+                        <button onClick={() => alert("Chatbot feature coming soon!")} title={isCollapsed ? "New Chatbot" : ""} className={`flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full ${isCollapsed ? 'justify-center' : 'text-left'} text-gray-300 hover:bg-[#4a4a4a]`}><ChatbotIcon className="h-6 w-6 flex-shrink-0" /><span className={`ml-3 whitespace-nowrap transition-all duration-200 ${isCollapsed ? 'w-0 opacity-0' : 'w-auto opacity-100'}`}>New Chatbot</span></button>
+                        <button onClick={handleSettingsClick} title={isCollapsed ? "Settings" : ""} className={`flex items-center p-3 rounded-lg text-lg transition-colors duration-200 w-full ${isCollapsed ? 'justify-center' : 'text-left'} text-gray-300 hover:bg-[#4a4a4a]`}><SettingsIcon className={`h-6 w-6 flex-shrink-0 ${isSettingsAnimating ? 'animate-gear-rotate' : ''}`} /><span className={`ml-3 whitespace-nowrap transition-all duration-200 ${isCollapsed ? 'w-0 opacity-0' : 'w-auto opacity-100'}`}>Settings</span></button>
+                    </>
+                )}
+            </div>
+        </aside>
+        {!isReadOnly && 
+            <SettingsModal 
+                isOpen={isSettingsOpen} 
+                onClose={() => setIsSettingsOpen(false)}
+                onShowViewShared={onShowViewShared}
+                onToggleActivity={onToggleActivity}
+                onReset={onReset}
+                onDeleteHistory={onDeleteHistory}
+                onLogout={onLogout}
+            />
+        }
+    </>);
 };
 const DataPreview = ({ data, headers, onDataEdit }) => {
-    // ... (This component remains largely unchanged but calls onDataEdit)
     const [currentPage, setCurrentPage] = useState(1);
     const [searchTerm, setSearchTerm] = useState('');
     const [editingCell, setEditingCell] = useState(null);
@@ -845,10 +919,359 @@ const ChartComponent = React.memo(({ config, data, ChartJS, onDrilldown }) => {
 const KPICard = ({ title, value, prefix = '', suffix = ''}) => {
     return (<Panel className="text-center relative"><h3 className="text-sm text-gray-400 uppercase tracking-wider h-10">{title}</h3><p className="text-4xl font-bold text-[#14FFEC] mt-2">{prefix}{typeof value === 'number' ? value.toLocaleString(undefined, {maximumFractionDigits: 2}) : value}{suffix}</p></Panel>);
 };
-const GaugeChart = ({ title, value, max, ChartJS, description }) => { /* ... Unchanged ... */ return <Panel/> };
-const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidgets, loading, ChartJS, activeDrilldown, onDrilldown, onResetDrilldown, onShowChartBuilder, onShowShare, onRemoveWidget, onOpenFilterModal, addToLog, isReadOnly }) => {
+const GaugeChart = ({ title, value, max, ChartJS, description }) => { return <Panel/> };
+
+const LIVE_GRADIENTS = [
+    'from-[#14FFEC] to-[#0D7377]',
+    'from-[#7C4DFF] to-[#3E206D]',
+    'from-[#FF8A00] to-[#FF3CAC]',
+    'from-[#00D2FF] to-[#3A7BD5]',
+    'from-[#F83600] to-[#F9D423]',
+    'from-[#845EF7] to-[#5F3DC4]'
+];
+const LIVE_TIME_WINDOWS = [
+    { id: 'all', label: 'All data' },
+    { id: '7', label: 'Last 7 days' },
+    { id: '30', label: '30 days' },
+    { id: '90', label: '90 days' }
+];
+const CURRENCY_KEYWORDS = ['revenue','rev','sales','sale','amount','cost','profit','price','value','pipeline','income','expense'];
+const PERCENT_KEYWORDS = ['rate','ratio','percent','conversion','margin','retention','growth'];
+const MAX_SEGMENT_SLICES = 6;
+
+const LiveDataSpotlight = ({ data, featuredCharts = [], ChartJS, onDrilldown }) => {
+    const quality = useMemo(() => calculateDataQuality(data), [data]);
+    const numericColumns = useMemo(() => Object.entries(quality || {}).filter(([, meta]) => meta.type === 'numeric'), [quality]);
+    const categoricalColumns = useMemo(() => Object.entries(quality || {}).filter(([, meta]) => meta.type === 'categorical' && meta.uniqueCount > 1 && meta.uniqueCount <= 50), [quality]);
+    const temporalColumns = useMemo(() => Object.entries(quality || {}).filter(([, meta]) => meta.type === 'temporal'), [quality]);
+    const temporalKey = temporalColumns[0]?.[0] || null;
+
+    const [activeMetric, setActiveMetric] = useState(numericColumns[0]?.[0] || null);
+    const [activeSegment, setActiveSegment] = useState(categoricalColumns[0]?.[0] || null);
+    const [timeframe, setTimeframe] = useState('all');
+
+    useEffect(() => {
+        if (numericColumns.length === 0) { setActiveMetric(null); return; }
+        if (!numericColumns.find(([name]) => name === activeMetric)) {
+            setActiveMetric(numericColumns[0][0]);
+        }
+    }, [numericColumns, activeMetric]);
+
+    useEffect(() => {
+        if (categoricalColumns.length === 0) { setActiveSegment(null); return; }
+        if (!categoricalColumns.find(([name]) => name === activeSegment)) {
+            setActiveSegment(categoricalColumns[0][0]);
+        }
+    }, [categoricalColumns, activeSegment]);
+
+    useEffect(() => {
+        if (!temporalKey) {
+            setTimeframe('all');
+        }
+    }, [temporalKey]);
+
+    const filteredRows = useMemo(() => {
+        if (!Array.isArray(data) || data.length === 0) return [];
+        if (!temporalKey || timeframe === 'all') return data;
+        const parsedRows = data.map(row => {
+            const raw = row[temporalKey];
+            const parsed = raw ? new Date(raw) : null;
+            return parsed && !isNaN(parsed) ? { row, date: parsed } : null;
+        }).filter(Boolean);
+        if (parsedRows.length === 0) return data;
+        const latestDate = parsedRows.reduce((max, item) => (item.date > max ? item.date : max), parsedRows[0].date);
+        const rangeDays = parseInt(timeframe, 10);
+        if (isNaN(rangeDays)) return data;
+        const threshold = new Date(latestDate);
+        threshold.setDate(threshold.getDate() - rangeDays);
+        const windowed = parsedRows.filter(item => item.date >= threshold).map(item => item.row);
+        return windowed.length > 0 ? windowed : data;
+    }, [data, temporalKey, timeframe]);
+
+    const coerceNumber = (value) => {
+        if (value === null || value === undefined) return null;
+        if (typeof value === 'number') return isFinite(value) ? value : null;
+        const parsed = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+        return isNaN(parsed) ? null : parsed;
+    };
+
+    const aggregated = useMemo(() => {
+        if (!activeMetric || filteredRows.length === 0) return [];
+        if (activeSegment) {
+            const totalsBySegment = filteredRows.reduce((acc, row) => {
+                const bucket = row[activeSegment] ?? 'Unlabeled';
+                const metricValue = coerceNumber(row[activeMetric]);
+                if (metricValue === null) return acc;
+                acc[bucket || 'Unlabeled'] = (acc[bucket || 'Unlabeled'] || 0) + metricValue;
+                return acc;
+            }, {});
+            return Object.entries(totalsBySegment)
+                .map(([name, total]) => ({ name, total }))
+                .sort((a, b) => b.total - a.total)
+                .slice(0, MAX_SEGMENT_SLICES);
+        }
+        const total = filteredRows.reduce((sum, row) => {
+            const metricValue = coerceNumber(row[activeMetric]);
+            return metricValue === null ? sum : sum + metricValue;
+        }, 0);
+        return total ? [{ name: 'All Data', total }] : [];
+    }, [filteredRows, activeMetric, activeSegment]);
+
+    const averageValue = aggregated.length > 0 ? aggregated.reduce((sum, seg) => sum + seg.total, 0) / aggregated.length : 0;
+    const chartSeries = aggregated.map((seg, idx) => ({
+        ...seg,
+        color: LIVE_GRADIENTS[idx % LIVE_GRADIENTS.length],
+        delta: averageValue ? ((seg.total - averageValue) / averageValue) * 100 : 0
+    }));
+    const chartPeak = chartSeries.length > 0 ? Math.max(...chartSeries.map(seg => seg.total), 1) : 1;
+    const leader = chartSeries[0];
+    const laggard = chartSeries.length > 1 ? chartSeries[chartSeries.length - 1] : null;
+
+    const metricDescriptor = activeMetric ? quality?.[activeMetric] : null;
+    const metricName = activeMetric || 'selected metric';
+    const lowerMetricName = metricName.toLowerCase();
+    const isCurrency = activeMetric ? CURRENCY_KEYWORDS.some(keyword => lowerMetricName.includes(keyword)) : false;
+    const isPercent = activeMetric ? (!isCurrency && PERCENT_KEYWORDS.some(keyword => lowerMetricName.includes(keyword))) : false;
+
+    const formatValue = (value) => {
+        if (value === null || value === undefined || isNaN(value)) return '—';
+        if (isCurrency) {
+            const abs = Math.abs(value);
+            if (abs >= 1_000_000) return `${value < 0 ? '-' : ''}$${(abs / 1_000_000).toFixed(1)}M`;
+            if (abs >= 1_000) return `${value < 0 ? '-' : ''}$${(abs / 1_000).toFixed(1)}K`;
+            return `${value < 0 ? '-' : ''}$${abs.toFixed(abs >= 10 ? 0 : 2)}`;
+        }
+        if (isPercent) {
+            return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+        }
+        return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    };
+
+    const summaryValues = useMemo(() => {
+        if (!activeMetric || filteredRows.length === 0) return { total: 0, avg: 0, count: 0 };
+        const values = filteredRows
+            .map(row => coerceNumber(row[activeMetric]))
+            .filter(v => v !== null);
+        if (values.length === 0) return { total: 0, avg: 0, count: 0 };
+        const total = values.reduce((sum, val) => sum + val, 0);
+        return { total, avg: total / values.length, count: values.length };
+    }, [filteredRows, activeMetric]);
+
+    const coverage = metricDescriptor?.missingPercentage ? Math.max(0, 100 - parseFloat(metricDescriptor.missingPercentage)) : null;
+    const recordsAnalyzed = filteredRows.length;
+    const timeframeLabel = timeframe === 'all' ? 'All available dates' : `Last ${timeframe} days`;
+    const insightCopy = leader
+        ? laggard
+            ? `${leader.name} contributes ${formatValue(leader.total)} toward ${metricName}, outperforming ${laggard.name} by ${formatValue(Math.abs(leader.total - laggard.total))}.`
+            : `${leader.name} contributes ${formatValue(leader.total)} toward ${metricName}.`
+        : 'Add a categorical column or choose another metric to surface comparisons.';
+
+    if (!data || data.length === 0) {
+        return null;
+    }
+
+    if (numericColumns.length === 0) {
+        return (
+            <Panel className="mb-8 bg-[#2a2a2a] border border-dashed border-gray-700 text-center">
+                <h3 className="text-xl font-semibold text-white mb-2">Live data spotlight</h3>
+                <p className="text-gray-400 text-sm">Upload a dataset with at least one numeric column to unlock the interactive insight panel.</p>
+            </Panel>
+        );
+    }
+
+    return (
+        <div className="mb-8 bg-[#161616] border border-gray-800 rounded-2xl p-5 md:p-6 shadow-2xl shadow-black/40">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Live dataset pulse</p>
+                    <h3 className="text-2xl font-bold text-white">Autonomous insight workspace</h3>
+                </div>
+                <span className="text-xs font-semibold text-[#14FFEC] bg-[#14FFEC]/10 border border-[#14FFEC]/40 px-3 py-1 rounded-full">
+                    Powered by your data
+                </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+                <div className="flex flex-col gap-2">
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Metric focus</p>
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                        {numericColumns.map(([name]) => (
+                            <button
+                                key={name}
+                                onClick={() => setActiveMetric(name)}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeMetric === name ? 'bg-[#14FFEC] text-black shadow-lg shadow-[#14FFEC]/40' : 'bg-[#1f1f1f] text-gray-300 hover:bg-[#2c2c2c]'}`}
+                            >
+                                {name}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {categoricalColumns.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                        <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Compare by</p>
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                            {categoricalColumns.map(([name]) => (
+                                <button
+                                    key={name}
+                                    onClick={() => setActiveSegment(name)}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${activeSegment === name ? 'border border-[#14FFEC] text-white' : 'border border-transparent text-gray-400 hover:text-white'}`}
+                                >
+                                    {name}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {temporalKey && (
+                    <div className="flex flex-col gap-2">
+                        <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Time window</p>
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                            {LIVE_TIME_WINDOWS.map(window => (
+                                <button
+                                    key={window.id}
+                                    onClick={() => setTimeframe(window.id)}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${timeframe === window.id ? 'bg-white text-black' : 'bg-[#202020] text-gray-300 hover:bg-[#2d2d2d]'}`}
+                                >
+                                    {window.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <div className="mt-6 grid lg:grid-cols-5 gap-4">
+                <div className="lg:col-span-3 bg-[#101010] border border-gray-800 rounded-xl p-4 flex flex-col">
+                    <div className="flex items-center justify-between text-sm text-gray-400">
+                        <span>{metricName}</span>
+                        <span>{timeframeLabel}</span>
+                    </div>
+                    <div className="flex items-end justify-between gap-2 h-40 mt-4">
+                        {chartSeries.length === 0 && (
+                            <p className="text-sm text-gray-500">No numeric values detected for this combination.</p>
+                        )}
+                        {chartSeries.map((item, idx) => (
+                            <div key={`${item.name}-${idx}`} className="flex flex-col items-center flex-1">
+                                <div className="h-full flex items-end w-full">
+                                    <div
+                                        className={`w-full bg-gradient-to-t ${item.color} rounded-t-lg transition-all duration-500 ${leader?.name === item.name ? 'ring-2 ring-[#14FFEC]/80 ring-offset-2 ring-offset-[#101010]' : ''}`}
+                                        style={{ height: `${Math.max(4, (item.total / chartPeak) * 100)}%` }}
+                                        aria-label={`${item.name} ${formatValue(item.total)}`}
+                                    ></div>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-2 truncate w-full text-center" title={item.name}>{item.name}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
+                        {chartSeries.map((item, idx) => (
+                            <div key={`card-${item.name}-${idx}`} className="bg-[#1b1b1b] rounded-lg p-3 border border-gray-800">
+                                <p className="text-[11px] text-gray-500 truncate" title={item.name}>{item.name}</p>
+                                <p className="text-lg font-semibold text-white">{formatValue(item.total)}</p>
+                                <span className={`text-[11px] ${item.delta >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                                    {item.delta >= 0 ? '+' : ''}{item.delta.toFixed(1)}% vs peer avg
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="lg:col-span-2 space-y-4">
+                    <div className="bg-[#101010] border border-gray-800 rounded-xl p-4">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-lg font-semibold text-white">Segment spotlight</h4>
+                            <span className="text-xs text-gray-500">Drilldown ready</span>
+                        </div>
+                        {leader ? (
+                            <>
+                                <p className="text-3xl font-bold text-[#14FFEC] mt-3">{leader.name}</p>
+                                <p className="text-sm text-gray-300">{formatValue(leader.total)} · {metricName}</p>
+                                {laggard && (
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        Δ vs {laggard.name}: {formatValue(leader.total - laggard.total)}
+                                    </p>
+                                )}
+                            </>
+                        ) : (
+                            <p className="text-sm text-gray-400 mt-3">Waiting for a categorical column to compare segments.</p>
+                        )}
+                    </div>
+                    <div className="bg-[#101010] border border-gray-800 rounded-xl p-4 flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-lg font-semibold text-white">Autonomous insight</h4>
+                            <button className="text-xs text-[#14FFEC] hover:underline">Share</button>
+                        </div>
+                        <p className="text-sm text-gray-300 flex-1">{insightCopy}</p>
+                        <div className="text-xs text-gray-500 space-y-1">
+                            <p>Records analysed · {recordsAnalyzed}</p>
+                            <p>Coverage · {coverage !== null ? `${coverage.toFixed(1)}%` : 'N/A'}</p>
+                            <p>Total · {formatValue(summaryValues.total)} · Avg · {formatValue(summaryValues.avg)}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {[{
+                    label: `Total ${metricName}`,
+                    value: formatValue(summaryValues.total),
+                    helper: `${recordsAnalyzed.toLocaleString()} rows analysed`
+                }, {
+                    label: `Average ${metricName}`,
+                    value: formatValue(summaryValues.avg),
+                    helper: 'Rolling mean for selected timeframe'
+                }, {
+                    label: 'Total records',
+                    value: summaryValues.count.toLocaleString(),
+                    helper: coverage !== null ? `Coverage ${coverage.toFixed(1)}%` : 'Coverage pending'
+                }].map((card, idx) => (
+                    <div key={`summary-card-${idx}`} className="relative rounded-2xl bg-gradient-to-b from-[#1b1b1b] to-[#101010] border border-gray-800 p-4 shadow-inner shadow-black/60">
+                        <div className="absolute inset-x-4 top-3 h-1 rounded-full bg-gradient-to-r from-[#14FFEC] to-transparent opacity-50"></div>
+                        <p className="text-xs uppercase tracking-[0.25em] text-gray-500">{card.label}</p>
+                        <p className="text-3xl md:text-4xl font-extrabold text-[#14FFEC] mt-4">{card.value}</p>
+                        <p className="text-xs text-gray-400 mt-3">{card.helper}</p>
+                    </div>
+                ))}
+            </div>
+
+            {featuredCharts.length > 0 && (
+                <div className="mt-8 border-t border-gray-800 pt-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-gray-500">Live chart deck</p>
+                            <h4 className="text-xl font-semibold text-white">Visual intelligence preview</h4>
+                        </div>
+                        <span className="text-xs text-gray-500">{featuredCharts.length} selected</span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        {featuredCharts.map(chart => (
+                            <div key={`spotlight-chart-${chart.id}`} className="bg-[#101010] border border-gray-800 rounded-xl p-4 shadow-xl shadow-black/30">
+                                <div className="flex items-start justify-between mb-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-white">{chart.title}</p>
+                                        {chart.insight && <p className="text-xs text-gray-500 mt-1">{chart.insight}</p>}
+                                    </div>
+                                    {chart.filter?.values?.length > 0 && (
+                                        <span className="text-[10px] text-[#14FFEC] bg-[#14FFEC]/10 px-2 py-1 rounded-full">Filtered</span>
+                                    )}
+                                </div>
+                                <div className="h-48">
+                                    <ChartComponent config={chart} data={data} ChartJS={ChartJS} onDrilldown={onDrilldown} />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidgets, loading, ChartJS, activeDrilldown, onDrilldown, onResetDrilldown, onShowChartBuilder, onShowShare, onRemoveWidget, onOpenFilterModal, onSave, currentDashboardId, addToLog, isReadOnly, onNewDashboard, onShowHistory }) => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [draggedItem, setDraggedItem] = useState(null);
+    const featuredCharts = useMemo(() => widgets.filter(w => w.type === 'chart').slice(0, 2), [widgets]);
 
     const handleNameChange = (e) => {
         const oldName = dashboardName;
@@ -865,7 +1288,7 @@ const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidg
             filteredData = data.filter(row => filterValues.has(row[rec.filter.column]));
         }
         
-    const { calculation, valueKey } = rec;
+        const { calculation, valueKey, value } = rec;
         if(calculation === 'value') return filteredData.length;
         if (!valueKey) return 'N/A';
         const values = (key) => filteredData.map(row => parseFloat(row[key])).filter(v => !isNaN(v));
@@ -901,12 +1324,32 @@ const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidg
     
     return (
         <div>
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
                 <div className="flex items-center gap-3">{isEditingName ? (<input type="text" defaultValue={dashboardName} onBlur={handleNameChange} onKeyDown={e => e.key === 'Enter' && handleNameChange(e)} className="text-3xl font-bold text-[#14FFEC] bg-transparent border-b-2 border-[#14FFEC] outline-none" autoFocus/>) : (<h2 className="text-3xl font-bold text-[#14FFEC]">{dashboardName}</h2>)}{!isReadOnly && <button onClick={() => setIsEditingName(!isEditingName)} className="text-gray-400 hover:text-white"><EditIcon className="h-6 w-6"/></button>}</div>
-                <div className="flex gap-2">{!isReadOnly && <button onClick={onShowChartBuilder} className="p-2 bg-[#323232] rounded-md hover:bg-[#4a4a4a]" title="Chart Builder"><ChatIcon className="h-6 w-6 text-white"/></button>}<button onClick={onShowShare} className="p-2 bg-[#323232] rounded-md hover:bg-[#4a4a4a]" title="Share Dashboard"><ShareIcon className="h-6 w-6 text-white"/></button></div>
+                <div className="flex gap-2 flex-wrap justify-end">
+                    {!isReadOnly && (
+                        <PrimaryButton onClick={onNewDashboard} className="flex items-center gap-2 bg-[#14FFEC] text-black hover:bg-[#0d7377]">
+                            <NewDashboardIcon className="h-5 w-5" />
+                            <span>New Dashboard</span>
+                        </PrimaryButton>
+                    )}
+                    {onShowHistory && (
+                        <button
+                            onClick={onShowHistory}
+                            className="p-2 bg-[#323232] rounded-md hover:bg-[#4a4a4a]"
+                            title="Dashboard History"
+                        >
+                            <HistoryIcon className="h-6 w-6 text-white" />
+                        </button>
+                    )}
+                    {!isReadOnly && <button onClick={onShowChartBuilder} className="p-2 bg-[#323232] rounded-md hover:bg-[#4a4a4a]" title="Chart Builder"><ChatIcon className="h-6 w-6 text-white"/></button>}
+                    <button onClick={onShowShare} className="p-2 bg-[#323232] rounded-md hover:bg-[#4a4a4a]" title="Share Dashboard"><ShareIcon className="h-6 w-6 text-white"/></button>
+                </div>
             </div>
             {activeDrilldown && <div className="mb-4"><PrimaryButton onClick={onResetDrilldown}>&larr; Back (Viewing {activeDrilldown.key}: {activeDrilldown.value})</PrimaryButton></div>}
-            
+
+            <LiveDataSpotlight data={data} featuredCharts={featuredCharts} ChartJS={ChartJS} onDrilldown={onDrilldown} />
+
             <div className="grid grid-cols-12 gap-6">
                  {widgets.map((rec, index) => {
                     if (rec.type === 'kpi') {
@@ -957,7 +1400,6 @@ const DashboardView = ({ dashboardName, setDashboardName, data, widgets, setWidg
     );
 };
 const ChartBuilderModal = ({isOpen, onClose, qualityReport, data, ChartJS, onAddChart}) => {
-    // ... (This component is largely unchanged but calls onAddChart)
     const [selectedColumns, setSelectedColumns] = useState([]);
     const [suggestions, setSuggestions] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -1090,39 +1532,32 @@ const FilterModal = ({ widget, data, onClose, onApplyFilter }) => {
 const ShareModal = ({ isOpen, onClose, stateToShare }) => {
     const [shareCode, setShareCode] = useState('');
     const [copyButtonText, setCopyButtonText] = useState('Copy Code');
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const cleanedData = stateToShare?.cleanedData || [];
 
     useEffect(() => {
-        if (isOpen) {
-            const createShareable = async () => {
-                setIsLoading(true);
-                try {
-                    const token = localStorage.getItem('token');
-                    const API_URL = 'http://localhost:8000';
-                    // Debug log to verify stateToShare is a list
-                    console.log('[ShareModal] stateToShare:', stateToShare, 'isArray:', Array.isArray(stateToShare));
-                    const response = await fetch(`${API_URL}/dashboard/share`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            ...(token ? { Authorization: `Bearer ${token}` } : {})
-                        },
-                        body: JSON.stringify({ dashboard_json: stateToShare.cleanedData })
-                    });
-                    if (!response.ok) throw new Error('Failed to share dashboard');
-                    const data = await response.json();
-                    setShareCode(data.code || 'Error!');
-                } catch (error) {
-                    console.error("Error creating shareable dashboard:", error);
-                    setShareCode('Error!');
-                } finally {
-                    setIsLoading(false);
-                }
-            };
-            createShareable();
-            setCopyButtonText('Copy Code');
-        }
-    }, [isOpen, stateToShare]);
+        if (!isOpen) return;
+
+        const createShareable = async () => {
+            setIsLoading(true);
+            setError('');
+            try {
+                const response = await dashboardApi.shareDashboard(cleanedData);
+                const generatedCode = response.code || response?.share_code;
+                setShareCode(generatedCode || '------');
+            } catch (err) {
+                console.error('Error creating shareable dashboard:', err);
+                setError(err?.response?.data?.detail || 'Unable to generate share code.');
+                setShareCode('');
+            } finally {
+                setIsLoading(false);
+                setCopyButtonText('Copy Code');
+            }
+        };
+
+        createShareable();
+    }, [isOpen, cleanedData]);
 
     const handleCopy = () => {
         if (!shareCode || isLoading) return;
@@ -1148,9 +1583,10 @@ const ShareModal = ({ isOpen, onClose, stateToShare }) => {
         <Modal isOpen={isOpen} onClose={onClose} title="Share Dashboard">
             <p className="text-gray-300 mb-2">Copy and share this code with others.</p>
             <p className="text-xs text-gray-500 mb-4">They can use the "View Shared" option to load your dashboard.</p>
-            <div className="w-full p-4 bg-[#212121] border border-gray-600 rounded-lg text-white mb-4 font-mono text-2xl tracking-widest text-center">
-                {isLoading ? <LoadingSpinner text="Generating code..."/> : shareCode}
+            <div className="w-full p-4 bg-[#212121] border border-gray-600 rounded-lg text-white mb-2 font-mono text-2xl tracking-widest text-center">
+                {isLoading ? <LoadingSpinner text="Generating code..."/> : (shareCode || '------')}
             </div>
+            {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
             <PrimaryButton onClick={handleCopy} className="w-full" disabled={isLoading || !shareCode}>{copyButtonText}</PrimaryButton>
         </Modal>
     );
@@ -1168,18 +1604,16 @@ const ViewSharedModal = ({ isOpen, onClose, onLoadShared }) => {
         setIsLoading(true);
         setError('');
         try {
-            const response = await fetch(`/dashboard/shared/${trimmedCode}`);
-            if (!response.ok) throw new Error('Invalid or expired code.');
-            const data = await response.json();
-            if (data && data.cleanedData && data.dashboardName) {
-                onLoadShared(data);
-                onClose();
-            } else {
-                setError('Invalid or expired code. Please check and try again.');
-            }
+            const shared = await dashboardApi.getSharedDashboard(trimmedCode);
+            onLoadShared({
+                cleanedData: shared.cleanedData || [],
+                dashboardName: shared.dashboardName || `Shared Dashboard ${trimmedCode}`,
+                dashboardWidgets: shared.dashboardWidgets || [],
+            });
+            onClose();
         } catch (err) {
             console.error("Error loading shared dashboard:", err);
-            setError('Could not load the dashboard. Please try again later.');
+            setError(err?.response?.data?.detail || 'Could not load the dashboard. Please try again later.');
         } finally {
             setIsLoading(false);
         }
@@ -1203,7 +1637,262 @@ const ViewSharedModal = ({ isOpen, onClose, onLoadShared }) => {
     );
 };
 
-const Exports = ({ data, XLSX }) => { /* ... Unchanged ... */ 
+const DashboardHistoryList = ({ dashboards, onLoad, onRename, onDelete, isCollapsed }) => {
+    const [editingId, setEditingId] = useState(null);
+    const [newName, setNewName] = useState('');
+    const [deletingId, setDeletingId] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const filteredDashboards = useMemo(() => {
+        if (!searchTerm) return dashboards;
+        return dashboards.filter(d => 
+            d.name.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+    }, [dashboards, searchTerm]);
+
+
+    const handleRenameStart = (dashboard) => {
+        setEditingId(dashboard.id);
+        setNewName(dashboard.name);
+    };
+
+    const handleRenameSubmit = () => {
+        if(editingId && newName) {
+            onRename(editingId, newName);
+        }
+        setEditingId(null);
+        setNewName('');
+    };
+
+    return (
+        <>
+            <div className="mt-4 pt-4 border-t border-gray-700 flex flex-col flex-grow overflow-hidden">
+                <div className={`px-1 flex-shrink-0 transition-all duration-300 ${isCollapsed ? 'opacity-0 h-0' : 'opacity-100 h-auto'}`}>
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Dashboard History</h3>
+                    <input 
+                        type="text"
+                        placeholder="Search..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full p-1.5 bg-[#212121] border border-gray-600 rounded-md text-white text-xs mt-2"
+                    />
+                </div>
+                 <h3 className={`text-xs font-semibold text-gray-400 uppercase tracking-wider text-center ${isCollapsed ? '' : 'hidden'}`}>DBs</h3>
+
+                <div className="mt-2 space-y-1 flex-grow overflow-y-auto pr-1">
+                    {filteredDashboards.map(d => (
+                        <div key={d.id} title={isCollapsed ? d.name : ''} className="group flex items-center justify-between p-3 rounded-lg text-gray-300 hover:bg-[#4a4a4a]">
+                            {editingId === d.id ? (
+                                <input
+                                    type="text"
+                                    value={newName}
+                                    onChange={e => setNewName(e.target.value)}
+                                    onBlur={handleRenameSubmit}
+                                    onKeyDown={e => e.key === 'Enter' && handleRenameSubmit()}
+                                    className="bg-transparent text-white w-full outline-none"
+                                    autoFocus
+                                />
+                            ) : (
+                                <button onClick={() => onLoad(d.id)} className={`flex-grow text-left truncate ${isCollapsed ? 'hidden' : ''}`}>{d.name}</button>
+                            )}
+                             {isCollapsed && <button onClick={() => onLoad(d.id)} className="w-full flex justify-center"><ChartIcon className="h-5 w-5"/></button>}
+
+                            <div className={`flex-shrink-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity ${isCollapsed ? 'hidden' : ''}`}>
+                                <button onClick={() => handleRenameStart(d)} className="p-1 hover:text-white"><EditIcon className="h-4 w-4" /></button>
+                                <button onClick={() => setDeletingId(d.id)} className="p-1 hover:text-red-400"><TrashIcon className="h-4 w-4" /></button>
+                            </div>
+                        </div>
+                    ))}
+                    {dashboards.length === 0 && <p className={`p-3 text-sm text-gray-500 ${isCollapsed ? 'text-center' : ''}`}>{isCollapsed ? '...' : 'No saved dashboards.'}</p>}
+                </div>
+            </div>
+            <ConfirmationModal 
+                isOpen={!!deletingId}
+                onClose={() => setDeletingId(null)}
+                onConfirm={() => onDelete(deletingId)}
+                title="Delete Dashboard"
+                message="Are you sure you want to delete this dashboard? This action cannot be undone."
+            />
+        </>
+    )
+}
+
+const SettingsModal = ({ isOpen, onClose, onShowViewShared, onToggleActivity, onReset, onDeleteHistory, onLogout }) => {
+    const [view, setView] = useState('main'); // 'main' | 'account'
+    const [showChangePassword, setShowChangePassword] = useState(false);
+    const [showDeleteHistoryConfirm, setShowDeleteHistoryConfirm] = useState(false);
+    const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
+    const [animatingIcons, setAnimatingIcons] = useState({});
+
+    const handleIconClick = (label, action) => {
+        setAnimatingIcons(prev => ({ ...prev, [label]: true }));
+        action();
+        setTimeout(() => setAnimatingIcons(prev => ({ ...prev, [label]: false })), 700);
+    }
+    
+    const userName = localStorage.getItem('user_name') || 'Vizora User';
+    const userEmail = localStorage.getItem('user_email') || 'Authenticated session';
+    
+    const getAnimationClass = (label) => {
+        switch(label) {
+            case 'View Shared': return 'animate-eye-view';
+            case 'Activity': return 'animate-clock-rotate';
+            case 'New Dashboard': return 'animate-new-dashboard';
+            case 'Logout': return 'animate-logout';
+            default: return '';
+        }
+    }
+
+    const mainSettings = [
+        { icon: UserIcon, label: 'My Account', action: () => setView('account') },
+        { icon: EyeIcon, label: 'View Shared', action: () => {onShowViewShared(); onClose();} },
+        { icon: ActivityIcon, label: 'Activity', action: () => {onToggleActivity(); onClose();} },
+        { icon: NewDashboardIcon, label: 'New Dashboard', action: () => {onReset(); onClose();} },
+        { icon: LogoutIcon, label: 'Logout', action: () => setShowLogoutConfirm(true), color: 'text-red-400 hover:bg-red-500/20' },
+    ];
+    
+    return (
+        <>
+            <Modal isOpen={isOpen} onClose={() => {onClose(); setView('main');}} title={view === 'main' ? "Settings" : "My Account"}
+                className={`transition-all duration-300 ${isOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-5'}`}
+            >
+                {view === 'account' && <button onClick={() => setView('main')} className="absolute top-6 left-6 text-gray-400 hover:text-white"><ArrowLeftIcon className="h-6 w-6"/></button>}
+                <div className="space-y-4 mt-4">
+                     {view === 'main' && mainSettings.map(item => (
+                        <button key={item.label} onClick={() => handleIconClick(item.label, item.action)} className={`w-full flex items-center p-3 rounded-lg text-lg transition-all duration-200 text-left transform active:scale-95 ${item.color || 'text-gray-300 hover:bg-[#4a4a4a]'}`}>
+                            <item.icon className={`h-6 w-6 mr-3 ${animatingIcons[item.label] ? getAnimationClass(item.label) : ''}`}/>
+                            <span>{item.label}</span>
+                        </button>
+                     ))}
+                     {view === 'account' && (
+                        <div className="space-y-4">
+                            <div className="p-4 bg-[#2a2a2a] rounded-lg text-center">
+                                <p className="text-gray-300"><strong>Name:</strong> {userName}</p>
+                                <p className="text-gray-300"><strong>Email:</strong> {userEmail}</p>
+                            </div>
+                             <PrimaryButton onClick={() => setShowChangePassword(true)} className="w-full">Change Password</PrimaryButton>
+                             <button onClick={() => setShowDeleteHistoryConfirm(true)} className="w-full text-red-400 font-bold py-2 px-6 rounded-lg hover:bg-red-500/20 transition-all">Delete History</button>
+                        </div>
+                     )}
+                </div>
+            </Modal>
+            
+            <ChangePasswordModal isOpen={showChangePassword} onClose={() => setShowChangePassword(false)} />
+            
+            <ConfirmationModal 
+                isOpen={showDeleteHistoryConfirm}
+                onClose={() => setShowDeleteHistoryConfirm(false)}
+                onConfirm={async () => {
+                    await onDeleteHistory?.();
+                    setShowDeleteHistoryConfirm(false);
+                    onClose();
+                }}
+                title="Delete All Dashboards?"
+                message="This is a dangerous action. All your saved dashboards will be permanently deleted and you can't undo it."
+            />
+            <LogoutModal isOpen={showLogoutConfirm} onClose={() => setShowLogoutConfirm(false)} onLogout={onLogout} />
+        </>
+    )
+}
+
+const ChangePasswordModal = ({ isOpen, onClose }) => {
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Change Password">
+            <div className="space-y-4">
+                <input type="password" placeholder="Old Password" className="w-full p-2 bg-[#212121] border border-gray-600 rounded-lg text-white" />
+                <input type="password" placeholder="New Password" className="w-full p-2 bg-[#212121] border border-gray-600 rounded-lg text-white" />
+                <input type="password" placeholder="Confirm New Password" className="w-full p-2 bg-[#212121] border border-gray-600 rounded-lg text-white" />
+                <PrimaryButton className="w-full" onClick={() => {alert("Password change not implemented yet."); onClose();}}>Update Password</PrimaryButton>
+            </div>
+        </Modal>
+    )
+}
+
+const LogoutModal = ({ isOpen, onClose, onLogout }) => {
+    const handleLogout = () => {
+        try {
+            onLogout?.();
+        } finally {
+            onClose();
+        }
+    };
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Logout">
+            <div className="text-center">
+                <h3 className="text-xl text-white mb-2">We're sad to see you go!</h3>
+                <p className="text-gray-400 mb-6">Thank you for using Vizora. We hope to see you again soon!</p>
+                <PrimaryButton onClick={handleLogout} className="w-full">Confirm Logout</PrimaryButton>
+            </div>
+        </Modal>
+    )
+}
+
+const DashboardHistoryScreen = ({ dashboards, onPreview, onDelete, onRename, onBack }) => {
+    const [editingId, setEditingId] = useState(null);
+    const [newName, setNewName] = useState('');
+    const [deletingId, setDeletingId] = useState(null);
+
+    const handleRenameStart = (dashboard) => {
+        setEditingId(dashboard.id);
+        setNewName(dashboard.name);
+    };
+
+    const handleRenameSubmit = () => {
+        if(editingId && newName) {
+            onRename(editingId, newName);
+        }
+        setEditingId(null);
+        setNewName('');
+    };
+
+    return (
+        <>
+        <div className="p-8 min-h-screen">
+            <div className="flex items-center gap-4 mb-8">
+                <button onClick={onBack} className="p-2 bg-[#323232] rounded-full hover:bg-[#4a4a4a]"><ArrowLeftIcon className="h-6 w-6 text-white"/></button>
+                <h1 className="text-3xl font-bold text-white">Dashboard History</h1>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {dashboards.map(d => (
+                     <div key={d.id} className="group bg-[#323232] rounded-lg p-4 flex flex-col justify-between">
+                        {editingId === d.id ? (
+                            <input
+                                type="text"
+                                value={newName}
+                                onChange={e => setNewName(e.target.value)}
+                                onBlur={handleRenameSubmit}
+                                onKeyDown={e => e.key === 'Enter' && handleRenameSubmit()}
+                                className="bg-[#2a2a2a] text-white w-full outline-none p-2 rounded-md mb-4"
+                                autoFocus
+                            />
+                        ) : (
+                            <h3 className="text-lg font-semibold text-white truncate mb-4">{d.name}</h3>
+                        )}
+                        <div className="flex items-center justify-between">
+                            <PrimaryButton onClick={() => onPreview(d.id)}>Open</PrimaryButton>
+                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => handleRenameStart(d)} className="p-2 text-gray-400 hover:text-white"><EditIcon className="h-5 w-5" /></button>
+                                <button onClick={() => setDeletingId(d.id)} className="p-2 text-gray-400 hover:text-red-400"><TrashIcon className="h-5 w-5" /></button>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            {dashboards.length === 0 && <p className="text-center text-gray-500">You haven't saved any dashboards yet.</p>}
+        </div>
+        <ConfirmationModal 
+            isOpen={!!deletingId}
+            onClose={() => setDeletingId(null)}
+            onConfirm={() => onDelete(deletingId)}
+            title="Delete Dashboard"
+            message="Are you sure you want to delete this dashboard? This action cannot be undone."
+        />
+        </>
+    );
+}
+
+const Exports = ({ data, XLSX }) => { 
      const exportDataToCSV = () => {
         const worksheet = XLSX.utils.json_to_sheet(data);
         const csv = XLSX.utils.sheet_to_csv(worksheet);
@@ -1254,8 +1943,6 @@ const ActivityPanel = ({ isOpen, onClose, log }) => {
 };
 
 // --- MAIN APP COMPONENT ---
-
-// eslint-disable-next-line no-unused-vars
 const loadScript = (src) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = src; script.async = true;
@@ -1264,34 +1951,23 @@ const loadScript = (src) => new Promise((resolve, reject) => {
 });
 
 export default function App() {
-    // State for user dashboards
-    const [userDashboards, setUserDashboards] = useState([]);
-    const [dashboardsLoading, setDashboardsLoading] = useState(true);
-
-    // Fetch all dashboards for the user on mount
-    useEffect(() => {
-        const fetchDashboards = async () => {
-            setDashboardsLoading(true);
-            try {
-                const dashboards = await dashboardApi.getMyDashboards();
-                setUserDashboards(dashboards);
-            } catch (err) {
-                setUserDashboards([]);
-            }
-            setDashboardsLoading(false);
-        };
-        fetchDashboards();
-    }, []);
+    const [searchParams] = useSearchParams();
     const [appState, setAppState] = useState('upload');
     const [originalData, setOriginalData] = useState(null);
     const [cleanedData, setCleanedData] = useState(null);
     const [dashboardName, setDashboardName] = useState('My Dashboard');
-    // eslint-disable-next-line no-unused-vars
+    const [dashboardWidgets, setDashboardWidgets] = useState([]);
+    const [currentDashboardId, setCurrentDashboardId] = useState(null);
+    const [savedDashboards, setSavedDashboards] = useState([]);
     const [libraries, setLibraries] = useState(null);
     const [activityLog, setActivityLog] = useState([]);
     const [isReadOnly, setIsReadOnly] = useState(false);
-    // Removed firebaseInstances
     const [showViewSharedModal, setShowViewSharedModal] = useState(false);
+    const [isLoadingData, setIsLoadingData] = useState(false);
+    const [isBackendLoading, setIsBackendLoading] = useState(false);
+    const [backendLoadError, setBackendLoadError] = useState(null);
+    const [isSavingDashboard, setIsSavingDashboard] = useState(false);
+    const [historyReturnState, setHistoryReturnState] = useState('upload');
     
     const addToLog = useCallback((type, details) => {
         setActivityLog(prev => [{ timestamp: new Date(), type, details }, ...prev]);
@@ -1299,36 +1975,82 @@ export default function App() {
     
     addToLog.log = activityLog;
 
-    useEffect(() => {
-      if (libraries) return;
-      const loadLibs = async () => {
+    const fetchSavedDashboards = useCallback(async () => {
         try {
-          const xlsxModule = await import('xlsx');
-          const chartModule = await import('chart.js/auto');
-          setLibraries({ XLSX: xlsxModule, ChartJS: chartModule.default });
+            const dashboards = await dashboardApi.getMyDashboards();
+            const mapped = dashboards
+                .filter(d => d.is_active !== 0)
+                .map(d => ({
+                    id: d.id,
+                    name: d.dashboard_name,
+                    data: d.dashboard_json || [],
+                    createdAt: d.created_at,
+                }));
+            setSavedDashboards(mapped);
         } catch (error) {
-          console.error('Failed to load libraries:', error);
+            console.error('Failed to load dashboards:', error);
         }
-      };
-      loadLibs();
+    }, []);
+
+    useEffect(() => {
+        fetchSavedDashboards();
+    }, [fetchSavedDashboards]);
+
+
+    const loadLibs = useCallback(async () => {
+        if(libraries) return;
+        try {
+            const xlsxModule = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs');
+            await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js');
+            setLibraries({ XLSX: xlsxModule, ChartJS: window.Chart });
+        } catch (error) { console.error("Failed to load libraries:", error); }
     }, [libraries]);
 
-    const handleFileProcessed = async (data, fileName) => {
+    useEffect(() => { loadLibs(); }, [loadLibs]);
+
+    const queryDashboardId = searchParams.get('id');
+
+    useEffect(() => {
+        if (!queryDashboardId) {
+            setBackendLoadError(null);
+            return;
+        }
+
+        const loadDashboardFromApi = async () => {
+            setIsBackendLoading(true);
+            setBackendLoadError(null);
+            try {
+                const response = await dashboardApi.getDashboard(queryDashboardId);
+                setIsReadOnly(true);
+                setOriginalData(response.dashboard_json || []);
+                setCleanedData(response.dashboard_json || []);
+                setDashboardName(response.dashboard_name || 'Dashboard');
+                setDashboardWidgets([]);
+                setCurrentDashboardId(response.id);
+                setAppState('dashboard');
+                addToLog('BACKEND_LOAD', { details: `Loaded dashboard #${response.id}` });
+            } catch (error) {
+                console.error('Failed to load dashboard', error);
+                setBackendLoadError(error?.response?.data?.detail || 'Failed to load dashboard');
+            } finally {
+                setIsBackendLoading(false);
+            }
+        };
+
+        loadDashboardFromApi();
+    }, [queryDashboardId, addToLog]);
+
+    const handleFileProcessed = (data, fileName) => {
         if (data.length > 0) {
             const newName = fileName.replace(/_/g, ' ').replace(/\.[^/.]+$/, "");
             setOriginalData(data);
             setCleanedData(data);
             setDashboardName(newName);
+            setDashboardWidgets([]);
+            setCurrentDashboardId(null);
             setAppState('mode_selection');
             addToLog('FILE_UPLOAD', { details: `Processed file: ${fileName}` });
-            // Save dashboard session to backend
-            try {
-                const dashboardApi = await import('../../services/dashboardApi');
-                await dashboardApi.dashboardApi.createDashboard(data, newName);
-            } catch (err) {
-                console.error('Failed to save dashboard session:', err);
-            }
-        } else { console.error("Uploaded file is empty."); }
+        } else { alert("Uploaded file is empty."); }
     };
     
     const handleCleaningComplete = (finalData) => {
@@ -1337,175 +2059,224 @@ export default function App() {
     };
 
     const handleReset = () => {
-        window.location.hash = ''; window.location.reload();
+        setAppState('upload');
+        setOriginalData(null);
+        setCleanedData(null);
+        setDashboardName('My Dashboard');
+        setDashboardWidgets([]);
+        setCurrentDashboardId(null);
+        setIsReadOnly(false);
+        setActivityLog([]);
+        setBackendLoadError(null);
     };
 
     const handleLoadShared = (sharedState) => {
         if (sharedState.cleanedData && sharedState.dashboardName) {
-            setIsReadOnly(true);
-            const data = sharedState.cleanedData;
-            // Ensure data is in a consistent format
-            const sanitizedData = Array.isArray(data) ? data : [];
-            setCleanedData(sanitizedData);
-            setOriginalData(sanitizedData); 
-            setDashboardName(sharedState.dashboardName);
-            setAppState('dashboard');
+            setOriginalData(sharedState.cleanedData);
+            setCleanedData(sharedState.cleanedData);
+            setDashboardName(`Copy of: ${sharedState.dashboardName}`);
+            setDashboardWidgets(sharedState.dashboardWidgets || []);
+            setCurrentDashboardId(null); // This is key to trigger a new save
+            setIsReadOnly(false); // Make it the user's own copy
+            setActivityLog([]);
+            setAppState('dashboard'); // This will trigger the auto-save useEffect
         }
     };
 
-    const handleSelectDashboard = async (dashboardId) => {
-        // This is a hypothetical function. The user would need to implement
-        // the backend API endpoint and the dashboardApi.getDashboard function.
-        console.log(`Loading dashboard ${dashboardId}...`);
+    const handleShowHistory = useCallback(() => {
+        setHistoryReturnState(appState);
+        setAppState('history');
+    }, [appState]);
+
+    const handleHistoryBack = useCallback(() => {
+        setAppState(historyReturnState || 'upload');
+    }, [historyReturnState]);
+
+
+    const handleSaveDashboard = useCallback(async () => {
+        if (isReadOnly || !cleanedData || cleanedData.length === 0 || isSavingDashboard) return;
+        setIsSavingDashboard(true);
         try {
-            // NOTE: dashboardApi.getDashboard is not defined in the provided code.
-            // This is an assumed function based on the user's request.
-            // You would need to implement this in your services/dashboardApi.js
-            const dashboard = await dashboardApi.getDashboard(dashboardId);
-            if (dashboard && dashboard.data) {
-                 setOriginalData(dashboard.data);
-                 setCleanedData(dashboard.data);
-                 setDashboardName(dashboard.dashboard_name);
-                 setAppState('dashboard'); // Stay on the dashboard view
-                 setIsReadOnly(false);
-                 addToLog('DASHBOARD_LOAD', { details: `Loaded dashboard: ${dashboard.dashboard_name}` });
+            if (currentDashboardId) {
+                await dashboardApi.updateDashboard(currentDashboardId, cleanedData, dashboardName);
+                addToLog('DASHBOARD_SAVE', { details: `Updated dashboard '${dashboardName}'.` });
             } else {
-                 throw new Error("Dashboard data is invalid.");
+                const response = await dashboardApi.createDashboard({
+                    dashboard_json: cleanedData,
+                    dashboard_name: dashboardName,
+                });
+                setCurrentDashboardId(response.id);
+                addToLog('DASHBOARD_SAVE', { details: `Saved new dashboard '${dashboardName}'.` });
             }
-        } catch(error) {
-            console.error("Failed to load dashboard session:", error);
-            // Optionally, show an error message to the user, e.g., using a toast notification component
+            await fetchSavedDashboards();
+        } catch (error) {
+            console.error('Error saving dashboard:', error);
+        } finally {
+            setIsSavingDashboard(false);
+        }
+    }, [isReadOnly, cleanedData, isSavingDashboard, currentDashboardId, dashboardName, fetchSavedDashboards, addToLog]);
+
+    useEffect(() => {
+        if (appState === 'dashboard' && !currentDashboardId && !isReadOnly && cleanedData && cleanedData.length > 0 && !isSavingDashboard) {
+            handleSaveDashboard();
+        }
+    }, [appState, currentDashboardId, isReadOnly, cleanedData, handleSaveDashboard, isSavingDashboard]);
+    
+    const handleLoadDashboard = async (dashboardId) => {
+        if (!dashboardId) return;
+        setIsLoadingData(true);
+        try {
+            const response = await dashboardApi.getDashboard(dashboardId);
+            const data = response.dashboard_json || [];
+            setCurrentDashboardId(response.id);
+            setDashboardName(response.dashboard_name);
+            setCleanedData(data);
+            setOriginalData(data);
+            setDashboardWidgets([]);
+            setAppState('dashboard');
+            setIsReadOnly(false);
+        } catch (error) {
+            console.error('Failed to load dashboard:', error);
+        } finally {
+            setIsLoadingData(false);
+        }
+    };
+    
+    const handleRenameDashboard = async (dashboardId, newName) => {
+        if (!dashboardId || !newName) return;
+        const dashboard = savedDashboards.find(d => d.id === dashboardId);
+        if (!dashboard) return;
+        try {
+            await dashboardApi.updateDashboard(dashboardId, dashboard.data, newName);
+            if (currentDashboardId === dashboardId) {
+                setDashboardName(newName);
+            }
+            await fetchSavedDashboards();
+        } catch (error) {
+            console.error('Failed to rename dashboard:', error);
         }
     };
 
+    const handleDeleteDashboard = async (dashboardId) => {
+        if (!dashboardId) return;
+        try {
+            await dashboardApi.deleteDashboard(dashboardId);
+            if(currentDashboardId === dashboardId) {
+                handleReset();
+            }
+            await fetchSavedDashboards();
+        } catch (error) {
+            console.error('Failed to delete dashboard:', error);
+        }
+    };
+
+    const handleDeleteHistory = async () => {
+        try {
+            await Promise.all(savedDashboards.map(d => dashboardApi.deleteDashboard(d.id)));
+            handleReset();
+            await fetchSavedDashboards();
+        } catch (error) {
+            console.error('Failed to delete dashboard history:', error);
+        }
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+    };
 
     const renderAppState = () => {
-        if (!libraries) return <div className="min-h-screen flex items-center justify-center"><div className="flex flex-col items-center justify-center space-y-4"><div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-[#14FFEC]"></div><p className="text-[#14FFEC] text-lg font-semibold">Loading Libraries...</p></div></div>;
-
-
-        // Sidebar for user dashboards (always visible on upload and after upload)
-        const DashboardsSidebar = () => (
-            <aside className="bg-[#232323] w-72 min-h-screen p-6 flex flex-col gap-6 border-r border-gray-700">
-                <div>
-                    <h2 className="text-2xl font-bold mb-4 text-white">Your Dashboards</h2>
-                    {dashboardsLoading ? (
-                        <LoadingSpinner text="Loading dashboards..." />
-                    ) : userDashboards.length === 0 ? (
-                        <div className="text-gray-400">No dashboards found. Upload a file to create one.</div>
-                    ) : (
-                        <ul className="space-y-2">
-                            {userDashboards.map(d => (
-                                <li key={d.id} className="bg-[#232323] rounded-lg p-4 flex items-center justify-between cursor-pointer hover:bg-[#2a2a2a] transition"
-                                    onClick={() => {
-                                        setIsReadOnly(false);
-                                        setDashboardName(d.dashboard_name);
-                                        setCleanedData(d.cleaned_data || []);
-                                        setOriginalData(d.cleaned_data || []);
-                                        setAppState('dashboard');
-                                    }}
-                                >
-                                    <span className="font-semibold text-white">{d.dashboard_name}</span>
-                                    <span className="text-xs text-gray-400 ml-2">{new Date(d.created_at).toLocaleString()}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-            </aside>
-        );
-
-        // Show upload screen with sidebar
-        if (appState === 'upload') {
+        const libsReady = !!libraries;
+        if (!libsReady || isLoadingData || isBackendLoading) {
+            const message = isBackendLoading
+                ? 'Loading Dashboard...'
+                : isLoadingData
+                    ? 'Loading Dashboard Data...'
+                    : !libsReady
+                        ? 'Loading Libraries...'
+                        : 'Connecting...';
             return (
-                <div className="flex">
-                    <DashboardsSidebar />
-                    <div className="flex-1">
-                        <FileUploadScreen onFileProcessed={handleFileProcessed} XLSX={libraries?.XLSX} onShowViewShared={() => setShowViewSharedModal(true)} />
+                <div className="min-h-screen flex items-center justify-center">
+                    <div className="flex flex-col items-center justify-center space-y-4">
+                        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-[#14FFEC]"></div>
+                        <p className="text-[#14FFEC] text-lg font-semibold">{message}</p>
                     </div>
                 </div>
             );
         }
 
-        // Show sidebar after upload as well (mode_selection, auto_progress, manual_wizard, dashboard)
-        const mainAppStates = ['mode_selection', 'auto_progress', 'manual_wizard', 'dashboard'];
-        if (mainAppStates.includes(appState)) {
-            let mainContent = null;
-            switch (appState) {
-                case 'mode_selection':
-                    mainContent = (<div className="flex flex-col items-center justify-center min-h-screen p-4"><h1 className="text-4xl font-bold text-white mb-6">Choose Cleaning Mode</h1><Panel className="w-full max-w-md space-y-6"><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Auto Mode</h2><p className="text-gray-300 mt-2">Let Vizora automatically clean your data. Ideal for quick results and best practices.</p><PrimaryButton onClick={() => setAppState('auto_progress')} className="mt-4 w-full">Start Auto Cleaning</PrimaryButton></div><div className="border-t border-gray-600"></div><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Manual Mode</h2><p className="text-gray-300 mt-2">A step-by-step wizard for full control over the cleaning process.</p><PrimaryButton onClick={() => setAppState('manual_wizard')} className="mt-4 w-full">Start Manual Wizard</PrimaryButton></div></Panel></div>);
-                    break;
-                case 'auto_progress':
-                    mainContent = <AutoCleaningProgress data={originalData} onCleaningComplete={handleCleaningComplete} addToLog={addToLog} />;
-                    break;
-                case 'manual_wizard':
-                    mainContent = <ManualCleaningWizard originalData={originalData} onCleaningComplete={handleCleaningComplete} addToLog={addToLog} />;
-                    break;
-                case 'dashboard':
-                    mainContent = <Dashboard dashboardName={dashboardName} setDashboardName={setDashboardName} cleanedData={cleanedData} setCleanedData={setCleanedData} onReset={handleReset} libraries={libraries} addToLog={addToLog} isReadOnly={false} onLoadShared={handleLoadShared} onShowViewShared={() => setShowViewSharedModal(true)} />;
-                    break;
-                default:
-                    mainContent = null;
-            }
+        if (backendLoadError) {
             return (
-                <div className="flex">
-                    <DashboardsSidebar />
-                    <div className="flex-1">
-                        {mainContent}
-                    </div>
+                <div className="min-h-screen flex items-center justify-center p-4">
+                    <Panel className="max-w-lg text-center space-y-4">
+                        <InfoIcon className="h-12 w-12 text-red-400 mx-auto" />
+                        <h2 className="text-2xl font-bold">Unable to load dashboard</h2>
+                        <p className="text-gray-300">{backendLoadError}</p>
+                        <PrimaryButton onClick={() => { setAppState('upload'); setIsReadOnly(false); }}>Return to Upload</PrimaryButton>
+                    </Panel>
                 </div>
             );
         }
-
-        if (isReadOnly) {
-            return <Dashboard
-                dashboardName={dashboardName}
-                setDashboardName={setDashboardName}
-                cleanedData={cleanedData}
-                setCleanedData={setCleanedData}
-                onReset={handleReset}
-                libraries={libraries}
-                addToLog={addToLog}
-                isReadOnly={true}
-                onLoadShared={handleLoadShared}
-                onShowViewShared={() => setShowViewSharedModal(true)}
-                userDashboards={[]}
-                dashboardsLoading={false}
-                onSelectDashboard={() => {}}
-             />;
-        }
-
+        
+           if (isReadOnly) {
+               return <Dashboard dashboardName={dashboardName} setDashboardName={setDashboardName} cleanedData={cleanedData} setCleanedData={setCleanedData} dashboardWidgets={dashboardWidgets} setDashboardWidgets={setDashboardWidgets} onReset={handleReset} onSave={() => {}} libraries={libraries} addToLog={addToLog} isReadOnly={true} onLoadShared={handleLoadShared} onShowViewShared={() => setShowViewSharedModal(true)} savedDashboards={[]} onLoadDashboard={()=>{}} onRenameDashboard={()=>{}} onDeleteDashboard={()=>{}} onDeleteHistory={handleDeleteHistory} onLogout={handleLogout} onShowHistory={handleShowHistory} />;
+           }
+        
         switch (appState) {
-            case 'mode_selection': return (<div className="flex flex-col items-center justify-center min-h-screen p-4"><h1 className="text-4xl font-bold text-white mb-6">Choose Cleaning Mode</h1><Panel className="w-full max-w-md space-y-6"><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Auto Mode</h2><p className="text-gray-300 mt-2">Let Vizora automatically clean your data. Ideal for quick results and best practices.</p><PrimaryButton onClick={() => setAppState('auto_progress')} className="mt-4 w-full">Start Auto Cleaning</PrimaryButton></div><div className="border-t border-gray-600"></div><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Manual Mode</h2><p className="text-gray-300 mt-2">A step-by-step wizard for full control over the cleaning process.</p><PrimaryButton onClick={() => setAppState('manual_wizard')} className="mt-4 w-full">Start Manual Wizard</PrimaryButton></div></Panel></div>);
+            case 'upload': return <FileUploadScreen onFileProcessed={handleFileProcessed} XLSX={libraries?.XLSX} onShowViewShared={() => setShowViewSharedModal(true)} onShowHistory={handleShowHistory} />;
+            case 'history': return <DashboardHistoryScreen dashboards={savedDashboards} onPreview={handleLoadDashboard} onDelete={handleDeleteDashboard} onRename={handleRenameDashboard} onBack={handleHistoryBack} />;
+            case 'mode_selection': return (<div className="relative min-h-screen"><button onClick={handleShowHistory} className="absolute top-6 right-6 p-3 bg-[#323232] rounded-full hover:bg-[#4a4a4a] transition-colors" title="View Dashboard History"><HistoryIcon className="h-6 w-6 text-white"/></button><div className="flex flex-col items-center justify-center min-h-screen p-4"><h1 className="text-4xl font-bold text-white mb-6">Choose Cleaning Mode</h1><Panel className="w-full max-w-md space-y-6"><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Auto Mode</h2><p className="text-gray-300 mt-2">Let Vizora automatically clean your data. Ideal for quick results and best practices.</p><PrimaryButton onClick={() => setAppState('auto_progress')} className="mt-4 w-full">Start Auto Cleaning</PrimaryButton></div><div className="border-t border-gray-600"></div><div><h2 className="text-2xl font-semibold text-[#14FFEC]">Manual Mode</h2><p className="text-gray-300 mt-2">A step-by-step wizard for full control over the cleaning process.</p><PrimaryButton onClick={() => setAppState('manual_wizard')} className="mt-4 w-full">Start Manual Wizard</PrimaryButton></div></Panel></div></div>);
             case 'auto_progress': return <AutoCleaningProgress data={originalData} onCleaningComplete={handleCleaningComplete} addToLog={addToLog} />;
             case 'manual_wizard': return <ManualCleaningWizard originalData={originalData} onCleaningComplete={handleCleaningComplete} addToLog={addToLog} />;
-            case 'dashboard': return <Dashboard
-                dashboardName={dashboardName}
-                setDashboardName={setDashboardName}
-                cleanedData={cleanedData}
-                setCleanedData={setCleanedData}
-                onReset={handleReset}
-                libraries={libraries}
-                addToLog={addToLog}
-                isReadOnly={false}
-                onLoadShared={handleLoadShared}
-                onShowViewShared={() => setShowViewSharedModal(true)}
-                userDashboards={userDashboards}
-                dashboardsLoading={dashboardsLoading}
-                onSelectDashboard={handleSelectDashboard}
-             />;
-            default: return <FileUploadScreen onFileProcessed={handleFileProcessed} XLSX={libraries?.XLSX} onShowViewShared={() => setShowViewSharedModal(true)} />;
+            case 'dashboard': return <Dashboard currentDashboardId={currentDashboardId} dashboardName={dashboardName} setDashboardName={setDashboardName} cleanedData={cleanedData} setCleanedData={setCleanedData} dashboardWidgets={dashboardWidgets} setDashboardWidgets={setDashboardWidgets} onReset={handleReset} onSave={handleSaveDashboard} libraries={libraries} addToLog={addToLog} isReadOnly={false} onLoadShared={handleLoadShared} onShowViewShared={() => setShowViewSharedModal(true)} savedDashboards={savedDashboards} onLoadDashboard={handleLoadDashboard} onRenameDashboard={handleRenameDashboard} onDeleteDashboard={handleDeleteDashboard} onDeleteHistory={handleDeleteHistory} onLogout={handleLogout} onShowHistory={handleShowHistory} />;
+            default: return <FileUploadScreen onFileProcessed={handleFileProcessed} XLSX={libraries?.XLSX} />;
         }
     };
 
     return (
         <div className="bg-[#212121] text-white min-h-screen font-sans">
-             <style>{`.range-slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px; background:#14FFEC; cursor:pointer; border-radius:50%; margin-top:-6px; } .range-slider::-moz-range-thumb{ width:16px; height:16px; background:#14FFEC; cursor:pointer; border-radius:50%; } .animate-fade-in { animation: fadeIn 0.5s ease-in-out; } @keyframes fadeIn { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: translateY(0); } }`}</style>
-             {renderAppState()}
-                 <ViewSharedModal 
-                     isOpen={showViewSharedModal} 
-                     onClose={() => setShowViewSharedModal(false)} 
-                     onLoadShared={handleLoadShared}
-                 />
+            <style>{`
+                    @keyframes gear-rotate { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }
+                    .animate-gear-rotate { animation: gear-rotate 0.5s ease-in-out; }
+                    
+                    @keyframes clock-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                    .animate-clock-rotate { animation: clock-rotate 0.7s ease-in-out; }
+
+                    @keyframes eye-view-animation { 
+                        0% { transform: scaleY(1); } 
+                        20% { transform: scaleY(0.1); }
+                        40% { transform: scaleY(1); }
+                        60% { stroke-dashoffset: 25.5; }
+                        100% { stroke-dashoffset: 0; }
+                    }
+                    .animate-eye-view .eye-parts { animation: eye-view-animation 0.7s ease-in-out; }
+                    .animate-eye-view .eye-slash { animation: eye-view-animation 0.7s ease-in-out; }
+
+                    @keyframes new-dashboard-animate {
+                        0%, 100% { transform: scale(1); }
+                        30% { transform: scale(1.05); }
+                        40%, 60% { transform: rotate(-2deg) scale(1.05); }
+                        50%, 70% { transform: rotate(2deg) scale(1.05); }
+                        80% { transform: rotate(0deg) scale(1.05); }
+                    }
+                    .animate-new-dashboard { animation: new-dashboard-animate 0.7s cubic-bezier(.36,-0.64,.34,1.76); }
+                    
+                    @keyframes logout-animate {
+                        0% { transform: translateX(0); }
+                        100% { transform: translateX(5px); }
+                    }
+                    .animate-logout .logout-arrow { animation: logout-animate 0.4s ease-in forwards; }
+                    .animate-logout .logout-door { opacity: 0; transition: opacity 0.2s 0.2s; }
+
+                    .range-slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px; background:#14FFEC; cursor:pointer; border-radius:50%; margin-top:-6px; } 
+                    .range-slider::-moz-range-thumb{ width:16px; height:16px; background:#14FFEC; cursor:pointer; border-radius:50%; } 
+            `}</style>
+            {renderAppState()}
+            <ViewSharedModal 
+                isOpen={showViewSharedModal} 
+                onClose={() => setShowViewSharedModal(false)} 
+                onLoadShared={handleLoadShared}
+            />
         </div>
     );
 }

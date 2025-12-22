@@ -1,19 +1,29 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, func
 from db import Base
 
+
 class Dashboard(Base):
     __tablename__ = "dashboards"
     id = Column(Integer, primary_key=True, index=True)
+    is_active = Column(Integer, default=1, nullable=False)  # 1 = active, 0 = deleted
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     dashboard_name = Column(String(255), nullable=False)
     dashboard_json = Column(JSON, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
 
 class SharedDashboard(Base):
     __tablename__ = "shared_dashboards"
     id = Column(Integer, primary_key=True, index=True)
+    is_active = Column(Integer, default=1, nullable=False)  # 1 = active, 0 = deleted
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     code = Column(String(10), unique=True, nullable=False, index=True)
     dashboard_json = Column(JSON, nullable=False)

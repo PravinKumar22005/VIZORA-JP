@@ -7,6 +7,7 @@ from sqlalchemy import JSON
 class FileMetadata(Base):
     __tablename__ = "file_metadata"
     id = Column(Integer, primary_key=True, index=True)
+    is_active = Column(Integer, default=1, nullable=False)  # 1 = active, 0 = deleted
     chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     file_name = Column(String, nullable=False)

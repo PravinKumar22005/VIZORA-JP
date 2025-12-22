@@ -1,21 +1,24 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from routers.signup_router import router
-from routers.login_router import router as login_router
-from routers.change_password_router import router as change_password_router
-from routers.chat_router import router as chat_router
-from routers.sharing_router import router as sharing_router
-
-from models.user import Base
-from db import engine
-
-from routers.ai_router import router as ai_router
-from routers.table_query_router import router as table_query_router
-from routers.dashboard_router import router as dashboard_router
-
-
-from fastapi.openapi.utils import get_openapi
-from fastapi.security import HTTPBearer
+from routers import (
+    signup_router,
+    login_router,
+    chat_router,
+    sharing_router,
+    dashboard_router,
+    change_password_router,
+    ai_router,
+    table_query_router,
+)
+from db import get_db
+from sqlalchemy.orm import Session
+import uvicorn
+from models.user import User
+from utils.jwt import get_current_user
+from fastapi.security import HTTPAuthorizationCredentials
+import os
+from starlette.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 
 app = FastAPI()
 
@@ -51,13 +54,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
-app.include_router(login_router)
-app.include_router(change_password_router)
-app.include_router(chat_router)
-app.include_router(ai_router)
-app.include_router(table_query_router)
-app.include_router(dashboard_router)
-app.include_router(sharing_router)
+app.include_router(signup_router.router)
+app.include_router(login_router.router)
+app.include_router(change_password_router.router)
+app.include_router(chat_router.router)
+app.include_router(ai_router.router)
+app.include_router(table_query_router.router)
+app.include_router(dashboard_router.router)
+app.include_router(sharing_router.router)
 # Uncomment to create tables (use alembic instead for production)
 # Base.metadata.create_all(bind=engine)
+
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(static_dir, exist_ok=True)
+
+app.mount(
+    "/static",
+    StaticFiles(directory=static_dir),
+    name="static",
+)

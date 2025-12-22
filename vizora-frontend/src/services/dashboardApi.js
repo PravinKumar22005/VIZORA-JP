@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 const API_URL = 'http://localhost:8000';
 
@@ -21,13 +20,21 @@ const dashboardApi = {
     }
     return await response.json();
   },
+  // Permanently delete a dashboard by ID
+  deleteDashboard: async (dashboardId) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.delete(`${API_URL}/dashboard/${dashboardId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
 
   // Create a new dashboard (session)
-  createDashboard: async (dashboardJson, dashboardName) => {
+  createDashboard: async (dashboardData) => {
     const token = localStorage.getItem('token');
     const response = await axios.post(
       `${API_URL}/dashboard`,
-      { dashboard_json: dashboardJson, dashboard_name: dashboardName },
+      dashboardData,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     return response.data;
@@ -62,12 +69,26 @@ const dashboardApi = {
     return response.data;
   },
 
-  // Delete a dashboard by ID
-  deleteDashboard: async (dashboardId) => {
+
+  // Soft delete a dashboard by ID (set is_active=0)
+  softDeleteDashboard: async (dashboardId) => {
     const token = localStorage.getItem('token');
-    const response = await axios.delete(`${API_URL}/dashboard/${dashboardId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const response = await axios.patch(
+      `${API_URL}/dashboard/${dashboardId}`,
+      { is_active: 0 },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return response.data;
+  },
+
+  // Restore a dashboard by ID (set is_active=1)
+  restoreDashboard: async (dashboardId) => {
+    const token = localStorage.getItem('token');
+    const response = await axios.patch(
+      `${API_URL}/dashboard/${dashboardId}`,
+      { is_active: 1 },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
     return response.data;
   },
 
