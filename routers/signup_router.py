@@ -4,10 +4,12 @@ from controllers.signup_controller import signup_user
 
 router = APIRouter()
 
+
 class SignupPayload(BaseModel):
     name: constr(min_length=2, max_length=50)
     email: EmailStr
     password: constr(min_length=6)
+
 
 @router.post("/signup")
 async def signup(payload: SignupPayload):
@@ -17,4 +19,4 @@ async def signup(payload: SignupPayload):
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

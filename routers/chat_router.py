@@ -1,6 +1,4 @@
 from controllers import message_controller
-
-
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from typing import List
 from models.user import User
@@ -12,6 +10,8 @@ from utils.azure_blob import upload_file_to_azure
 import pandas as pd
 import io
 import math
+import numpy as np
+from datetime import datetime
 
 router = APIRouter()
 
@@ -27,6 +27,10 @@ class MessageCreate(BaseModel):
 
 class ChatUpdate(BaseModel):
     is_active: int
+
+
+class ChatRename(BaseModel):
+    title: str
 
 
 @router.delete("/messages/permanent/{message_id}")
@@ -56,6 +60,15 @@ def update_chat_is_active(
     )
 
 
+@router.patch("/chats/{chat_id}/title", response_model=dict)
+def rename_chat(
+    chat_id: int,
+    payload: ChatRename,
+    user: User = Depends(get_current_user),
+):
+    return chat_controller.update_chat(user.id, chat_id, title=payload.title)
+
+
 @router.post("/chats", response_model=dict)
 def create_chat(
     chat: ChatCreate,
@@ -64,13 +77,11 @@ def create_chat(
     return chat_controller.create_chat(user.id, chat.title)
 
 
-# List active chats
 @router.get("/chats", response_model=List[dict])
 def list_chats(user: User = Depends(get_current_user)):
     return chat_controller.list_chats(user.id)
 
 
-# List deleted chats (for recycle bin)
 @router.get("/chats/deleted", response_model=List[dict])
 def list_deleted_chats(user: User = Depends(get_current_user)):
     return chat_controller.list_deleted_chats(user.id)
@@ -100,49 +111,195 @@ async def upload_file_metadata(
     user: User = Depends(get_current_user),
 ):
     try:
-        # 1. Upload file to Azure Blob
+        filename_lower = (file.filename or "").lower()
+        content_type = getattr(file, "content_type", "unknown")
+        print(
+            f"[upload_file_metadata] filename={file.filename} content_type={content_type}"
+        )
+
         bucket_path = upload_file_to_azure(file.file, file.filename)
 
-        # 2. Extract metadata
         file.file.seek(0)
         content = await file.read()
-        columns = []
-        num_rows = 0
-        num_columns = 0
-        summary_stats = {}
-        table_names = None
 
-        if file.filename.lower().endswith(".csv"):
+        table_names: List[str] = []
+        per_sheet: List[dict] = []
+        selected_df = None
+        selected_sheet = None
+
+        if filename_lower.endswith(".csv"):
             df = pd.read_csv(io.BytesIO(content))
-            columns = [
-                {
-                    "name": col,
-                    "type": str(df[col].dtype),
-                    "sample_values": df[col].head(3).tolist(),
-                }
-                for col in df.columns
-            ]
-            num_rows = len(df)
-            num_columns = len(df.columns)
-            summary_stats = df.describe().to_dict()
-        elif file.filename.lower().endswith((".xls", ".xlsx")):
-            xls = pd.ExcelFile(io.BytesIO(content))
+            selected_df = df
+            selected_sheet = "csv"
+            table_names = ["csv"]
+            per_sheet.append(
+                {"sheet": "csv", "num_rows": len(df), "num_columns": len(df.columns)}
+            )
+        elif filename_lower.endswith(".xlsb"):
+            xls = pd.ExcelFile(io.BytesIO(content), engine="pyxlsb")
             table_names = xls.sheet_names
-            # For simplicity, extract metadata from the first sheet
-            df = xls.parse(table_names[0])
-            columns = [
-                {
-                    "name": col,
-                    "type": str(df[col].dtype),
-                    "sample_values": df[col].head(3).tolist(),
-                }
-                for col in df.columns
-            ]
-            num_rows = len(df)
-            num_columns = len(df.columns)
-            summary_stats = df.describe().to_dict()
+            for sheet in table_names:
+                tmp = xls.parse(sheet)
+                if len(tmp.columns) > 0 and len(tmp) > 0:
+                    if selected_df is None:
+                        selected_df = tmp
+                        selected_sheet = sheet
+                    per_sheet.append(
+                        {
+                            "sheet": sheet,
+                            "num_rows": len(tmp),
+                            "num_columns": len(tmp.columns),
+                        }
+                    )
+        elif filename_lower.endswith(".xlsm") or filename_lower.endswith(".xlsx"):
+            parsed = False
+            try:
+                xls = pd.ExcelFile(io.BytesIO(content))
+                table_names = xls.sheet_names
+                for sheet in table_names:
+                    tmp = xls.parse(sheet)
+                    if len(tmp.columns) > 0 and len(tmp) > 0:
+                        if selected_df is None:
+                            selected_df = tmp
+                            selected_sheet = sheet
+                        per_sheet.append(
+                            {
+                                "sheet": sheet,
+                                "num_rows": len(tmp),
+                                "num_columns": len(tmp.columns),
+                            }
+                        )
+                parsed = True
+            except Exception:
+                parsed = False
+            if not parsed or selected_df is None:
+                try:
+                    xls = pd.ExcelFile(io.BytesIO(content), engine="openpyxl")
+                    table_names = xls.sheet_names
+                    for sheet in table_names:
+                        tmp = xls.parse(sheet)
+                        if len(tmp.columns) > 0 and len(tmp) > 0:
+                            if selected_df is None:
+                                selected_df = tmp
+                                selected_sheet = sheet
+                            per_sheet.append(
+                                {
+                                    "sheet": sheet,
+                                    "num_rows": len(tmp),
+                                    "num_columns": len(tmp.columns),
+                                }
+                            )
+                except Exception:
+                    all_sheets = pd.read_excel(io.BytesIO(content), sheet_name=None)
+                    table_names = list(all_sheets.keys())
+                    for name, tmp in all_sheets.items():
+                        if len(tmp.columns) > 0 and len(tmp) > 0:
+                            if selected_df is None:
+                                selected_df = tmp
+                                selected_sheet = name
+                            per_sheet.append(
+                                {
+                                    "sheet": name,
+                                    "num_rows": len(tmp),
+                                    "num_columns": len(tmp.columns),
+                                }
+                            )
+        elif filename_lower.endswith(".xls"):
+            xls = pd.ExcelFile(io.BytesIO(content), engine="xlrd")
+            table_names = xls.sheet_names
+            for sheet in table_names:
+                tmp = xls.parse(sheet)
+                if len(tmp.columns) > 0 and len(tmp) > 0:
+                    if selected_df is None:
+                        selected_df = tmp
+                        selected_sheet = sheet
+                    per_sheet.append(
+                        {
+                            "sheet": sheet,
+                            "num_rows": len(tmp),
+                            "num_columns": len(tmp.columns),
+                        }
+                    )
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file type")
+            all_sheets = pd.read_excel(io.BytesIO(content), sheet_name=None)
+            table_names = list(all_sheets.keys())
+            for name, tmp in all_sheets.items():
+                if len(tmp.columns) > 0 and len(tmp) > 0:
+                    if selected_df is None:
+                        selected_df = tmp
+                        selected_sheet = name
+                    per_sheet.append(
+                        {
+                            "sheet": name,
+                            "num_rows": len(tmp),
+                            "num_columns": len(tmp.columns),
+                        }
+                    )
+
+        if selected_df is None:
+            raise HTTPException(
+                status_code=400, detail="No non-empty sheets found in workbook."
+            )
+
+        # Helper to convert numpy/pandas/datetime values to JSON-safe primitives
+        def make_json_safe(obj):
+            if obj is None:
+                return None
+            if isinstance(obj, (np.generic,)):
+                return obj.item()
+            if isinstance(obj, pd.Timestamp):
+                return obj.isoformat()
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, (np.datetime64,)):
+                try:
+                    return pd.Timestamp(obj).isoformat()
+                except Exception:
+                    return str(obj)
+            if isinstance(
+                obj,
+                (
+                    np.int64,
+                    np.int32,
+                    np.int16,
+                    np.int8,
+                    np.uint64,
+                    np.uint32,
+                    np.uint16,
+                    np.uint8,
+                ),
+            ):
+                return int(obj)
+            if isinstance(obj, (np.float64, np.float32, np.float16)):
+                return float(obj)
+            if isinstance(obj, (np.bool_,)):
+                return bool(obj)
+            if isinstance(obj, dict):
+                return {str(k): make_json_safe(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple, set)):
+                return [make_json_safe(v) for v in obj]
+            # pandas NA / NaN
+            try:
+                if pd.isna(obj):
+                    return None
+            except Exception:
+                pass
+            return obj if isinstance(obj, (str, int, float, bool)) else str(obj)
+
+        columns = [
+            {
+                "name": str(col),
+                "type": str(selected_df[col].dtype),
+                "sample_values": make_json_safe(selected_df[col].head(3).tolist()),
+            }
+            for col in selected_df.columns
+        ]
+        num_rows = len(selected_df)
+        num_columns = len(selected_df.columns)
+        try:
+            stats = selected_df.describe(include="all").to_dict()
+        except Exception:
+            stats = {}
 
         def clean_nans(obj):
             if isinstance(obj, float) and math.isnan(obj):
@@ -153,11 +310,9 @@ async def upload_file_metadata(
                 return [clean_nans(x) for x in obj]
             return obj
 
-        # Clean NaNs before saving to DB
-        columns = clean_nans(columns)
-        summary_stats = clean_nans(summary_stats)
+        columns = make_json_safe(clean_nans(columns))
+        stats = make_json_safe(clean_nans(stats))
 
-        # 3. Save metadata in DB
         return chat_controller.add_file_metadata(
             user.id,
             chat_id,
@@ -167,10 +322,18 @@ async def upload_file_metadata(
             columns=columns,
             num_rows=num_rows,
             num_columns=num_columns,
-            summary_stats=summary_stats,
+            summary_stats=make_json_safe(
+                {
+                    "selected_sheet": selected_sheet,
+                    "per_sheet": per_sheet,
+                    "stats": stats,
+                }
+            ),
             bucket_path=bucket_path,
             table_names=table_names,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"File processing error: {str(e)}")
 

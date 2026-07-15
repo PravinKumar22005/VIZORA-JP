@@ -1,4 +1,4 @@
-from typing import List
+from typing import Optional
 
 from fastapi import HTTPException
 
@@ -20,6 +20,30 @@ def update_chat_is_active(user_id: int, chat_id: int, is_active: int):
         db.commit()
         db.refresh(chat)
         return {"id": chat.id, "is_active": chat.is_active}
+    finally:
+        db.close()
+
+
+def update_chat(user_id: int, chat_id: int, title: str = None, is_active: int = None):
+    db = SessionLocal()
+    try:
+        chat = (
+            db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == user_id).first()
+        )
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        updated = False
+        if title is not None:
+            chat.title = title
+            updated = True
+        if is_active is not None:
+            chat.is_active = is_active
+            updated = True
+        if not updated:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        db.commit()
+        db.refresh(chat)
+        return {"id": chat.id, "title": chat.title, "is_active": chat.is_active}
     finally:
         db.close()
 
